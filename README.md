@@ -1,4 +1,4 @@
-# ymir
+![image](ymir_logo_app.png)
 
 AOTR mission macro with a clean status window. Uses external keyboard/mouse input only.
 
