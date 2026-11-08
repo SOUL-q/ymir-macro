@@ -1,0 +1,16 @@
+# PyInstaller output
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+
+# Debug screenshots the macro can save next to the script
+last_end_scan.png
+last_retry_click.png
+
+# Stats (now saved in Documents\Ymir Macro, but just in case)
+aotr_stats.json
+aotr_stats.json.tmp
