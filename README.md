@@ -12,7 +12,7 @@ AOTR mission macro with a clean status window. Uses external keyboard/mouse inpu
 - Themes (Settings > Themes): Default, Violet, Rose, Ember, Terminal, Ocean - applied instantly
 - 
 ### Adapts to different types of movements
-![image](documentation/movement.png)
+![image](documentation/movements.png)
 
 ### Adapts to different types of playstyles
 ![image](documentation/abilities.png)
