@@ -22,6 +22,7 @@ AOTR mission macro with a clean status window. Uses external keyboard/mouse inpu
 ## Builds/layout (Important
  ### Shiki:
 ![image](documentation/layout_shiki.png)
+
 ![image](documentation/shiki_config.png)
 - Recommended to use <img src="documentation/divine.webp" width="20" height="20"> <img src="documentation/godforged.svg" height="18" alt="GODFORGED"> ; Can use artifacts with TS stats too
 - Must have Founder's blessing ; better if you have avatar of ymir
@@ -31,6 +32,7 @@ AOTR mission macro with a clean status window. Uses external keyboard/mouse inpu
 
  ### Blood awakening:
 ![image](documentation/layout_blood.png)
+
 ![image](documentation/blood_config.png)
 - Not a lot of requirements for it but try to avoid using Frtiz/Yeager.
 - Use your best Shifter Build for colossal titan. Avoid Tatsujin/Flashsteps/Wings of freedom
