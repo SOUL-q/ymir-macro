@@ -25,11 +25,17 @@ Result + loot tracking:
   COMPLETED / FAILED (result_completed.png, result_failed.png) and counted.
   The loot icons are scanned at the same moment
   (loot_scroll.png, loot_body.png, loot_defence.png, loot_offence.png,
-  loot_support.png - keep them next to this script) BEFORE retry is clicked.
+  loot_support.png - keep them in the "image" folder next to this script) BEFORE retry is clicked.
   Every kind that is on screen counts as 1 for that mission, whatever the number
   in its corner says.  1 scroll + 2 different fragments = "1 scroll, 2 fragments".
 
-Family (Settings): "Universal" (WIP, not the default) does 12 dashes, then after ability 3 spams ability 4
+Movement (Settings > Configs > Movements): only changes the initial dash sequence, before
+  ability 4 is used. "Shiki" = 14 dashes + strafe A, "Universal" = 12 dashes + strafe A,
+  "Wings of Freedom" = spam dash for 8s, then strafe A for 4s.
+
+Family / abilities (Settings > Configs > Abilities): "Blood Awakening" skips ability 3, the
+  buying time and ability 4: right after the movement it goes to the ability 5 shift, the wait,
+  shifted ability 4 and shifted ability 5.  "Universal" (WIP, not the default) does 12 dashes, then after ability 3 spams ability 4
   for 5s, strafes A once, D for 2s, A for 4s, then goes on with the ability 5 shift. "Shiki" keeps
   the routine described above (14 dashes, 15s of buying time, ability 4 once).
 
@@ -41,8 +47,9 @@ Grabbed detection:
 Install:
     pip install mss opencv-python numpy pydirectinput keyboard
     (tkinter comes with Python on Windows)
-    Keep ymir_logo_app.png next to this script (header logo; text fallback if missing).
-    Keep ymir.ico next to this script too (window icon; default icon if missing).
+    Keep all images in a folder called "image" next to this script.
+    ymir_logo_app.png (header logo; text fallback if missing).
+    ymir.ico (window icon; default icon if missing).
 
 Run (as administrator, Roblox in windowed/borderless mode):
     python main.py
@@ -56,7 +63,7 @@ Settings (footer -> Settings):
     Discord  : optional webhook, stats embed after every mission, stats graph every N hours
               (+ test buttons), mention on errors (needs your user ID)
     Configs  : Shiki / Universal (WIP) / Blood Awakening (WIP) (default Shiki)
-    Everything is saved in aotr_stats.json next to the script.
+    Everything is saved in aotr_stats.json inside the Documents folder, in "Ymir Macro".
 Slamming the mouse into a screen corner also aborts (pydirectinput failsafe).
 """
 
@@ -66,6 +73,7 @@ import json
 import os
 import queue
 import random
+import shutil
 import sys
 import threading
 import time
@@ -133,7 +141,10 @@ ABILITY4_COOLDOWN = 15.0           # seconds of buying time after ability 3
 ABILITY4_COOLDOWN_MARGIN = 0.3     # tiny extra, so ability 4 is surely off cooldown
 
 # --- Saved stats (kept between runs; the Reset button in the window erases them) ---
-STATS_FILE = "aotr_stats.json"   # saved next to this script
+STATS_FILE = "aotr_stats.json"   # saved in Documents\Ymir Macro
+STATS_FOLDER = "Ymir Macro"      # folder created inside your Documents folder
+IMAGE_FOLDER = "image"           # all images (templates, logo, icon) are loaded from this folder,
+                                 # next to this script / .exe
 
 # --- Mission routine timings ---
 AFTER_ABILITY_DELAY = 0.6        # pause after ability 3 / 4
@@ -180,7 +191,22 @@ UNIVERSAL_ABILITY4_INTERVAL = 0.2  # seconds between those ability 4 presses
 UNIVERSAL_STRAFE_D_TIME = 2.0
 UNIVERSAL_STRAFE_A_TIME = 4.0
 
+# --- Movement (Settings > Configs > Movements): only changes the initial dash sequence,
+# before ability 4 has been used.  Shiki = DASH_COUNT dashes, Universal = UNIVERSAL_DASH_COUNT
+# dashes (both followed by one strafe A), Wings of Freedom = spam dash, then strafe A.
+WINGS_DASH_TIME = 8.0            # seconds of spamming dash
+WINGS_DASH_GAP = (0.15, 0.25)    # seconds between the dashes while spamming
+WINGS_STRAFE_TIME = 4.0          # seconds of strafing A afterwards
+
 # --- Settings window ---
+MOVEMENTS = ("Shiki", "Universal", "Wings of Freedom")
+DEFAULT_MOVEMENT = "Shiki"
+MOVEMENT_WIP = ("Universal",)    # these get a WIP tag in the dropdown
+MOVEMENT_BADGES = {
+    "Shiki":            ("S", "#3b82f6", "#ffffff"),   # blue S
+    "Universal":        ("U", "#facc15", "#1a1500"),   # yellow U
+    "Wings of Freedom": ("W", "#14b8a6", "#ffffff"),   # teal W
+}
 FAMILIES = ("Shiki", "Universal", "Blood Awakening")
 DEFAULT_FAMILY = "Shiki"
 FAMILY_LABELS = {f: f for f in FAMILIES}   # what the dropdown shows
@@ -323,12 +349,36 @@ def app_dir():
 
 
 def asset_path(filename):
-    """A file next to the .exe / script wins (so you can swap an image without
-    recompiling); otherwise the copy bundled inside the .exe is used."""
-    local = os.path.join(app_dir(), filename)
+    """Images are loaded from the "image" folder. One next to the .exe / script wins
+    (so you can swap an image without recompiling); otherwise the copy bundled
+    inside the .exe is used."""
+    local = os.path.join(app_dir(), IMAGE_FOLDER, filename)
     if os.path.exists(local):
         return local
-    return os.path.join(getattr(sys, "_MEIPASS", app_dir()), filename)
+    return os.path.join(getattr(sys, "_MEIPASS", app_dir()), IMAGE_FOLDER, filename)
+
+
+def documents_dir():
+    """The user's real Documents folder (follows OneDrive redirection on Windows)."""
+    if sys.platform == "win32":
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            # CSIDL_PERSONAL = 5 (My Documents), SHGFP_TYPE_CURRENT = 0
+            if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
+                return buf.value
+        except Exception:  # noqa: BLE001
+            pass
+    return os.path.join(os.path.expanduser("~"), "Documents")
+
+
+def data_dir():
+    """Documents\\Ymir Macro - created if it doesn't exist yet. The json lives here."""
+    path = os.path.join(documents_dir(), STATS_FOLDER)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return app_dir()   # can't create it: fall back to next to the script
+    return path
 
 STEP_NAMES = ["Ability 2", "Dashing", "Strafe", "Ability 3",
               "Buying time", "Ability 4", "Shift", "Shifted 4", "Ability 5"]
@@ -367,6 +417,7 @@ settings = {
     "keybinds": dict(DEFAULT_KEYBINDS),
     "webhook": dict(DEFAULT_WEBHOOK),
     "family": DEFAULT_FAMILY,
+    "movement": DEFAULT_MOVEMENT,
     "theme": DEFAULT_THEME,
 }
 
@@ -407,6 +458,10 @@ def load_settings(saved):
         settings["webhook"]["graph_hours"] = min(MAX_GRAPH_HOURS, max(1, hours))
     if saved.get("family") in FAMILIES:
         settings["family"] = saved["family"]
+    if saved.get("movement") in MOVEMENTS:
+        settings["movement"] = saved["movement"]
+    elif saved.get("family") == "Universal":
+        settings["movement"] = "Universal"   # older save: Universal used to include its dashes
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
 
@@ -736,7 +791,18 @@ def set_step(i):
 
 
 def stats_path():
-    return os.path.join(app_dir(), STATS_FILE)
+    return os.path.join(data_dir(), STATS_FILE)
+
+
+def migrate_old_stats():
+    """One time: if the json used to live next to the script, copy it into the Documents/Ymir Macro folder."""
+    old = os.path.join(app_dir(), STATS_FILE)
+    new = stats_path()
+    if os.path.exists(old) and not os.path.exists(new) and os.path.abspath(old) != os.path.abspath(new):
+        try:
+            shutil.copy2(old, new)
+        except OSError:
+            pass
 
 
 _save_lock = threading.Lock()
@@ -758,6 +824,7 @@ def save_stats():
 
 
 def load_stats():
+    migrate_old_stats()
     try:
         with open(stats_path(), encoding="utf-8") as f:
             data = json.load(f)
@@ -1153,6 +1220,22 @@ def strafe_for(key, seconds):
         wait(0.05)
 
 
+def dash_spam_for(key, seconds):
+    """Dash (double-tap) over and over for a while - Wings of Freedom movement."""
+    end = time.time() + seconds
+    next_dash = time.time()
+    while True:
+        now = time.time()
+        remaining = end - now
+        if remaining <= 0:
+            return
+        detail(f"Dashing... {remaining:.0f}s left")
+        if now >= next_dash:
+            double_tap(key)
+            next_dash = time.time() + random.uniform(*WINGS_DASH_GAP)
+        wait(0.05)
+
+
 # ---------------------------- the routine -------------------------------
 def run_mission():
     stats["missions"] += 1
@@ -1166,27 +1249,48 @@ def run_mission():
     tap(KEY_ABILITY_1ST)
     wait(AFTER_ABILITY2_DELAY)  # nothing else happens until the dash sequence
 
-    set_step(1)
-    universal = settings["family"] == "Universal"   # read once per mission
-    dash_count = UNIVERSAL_DASH_COUNT if universal else DASH_COUNT
-    log(f"Dashing x{dash_count}")
-    for n in range(dash_count):
-        show("Dashing", f"Dash {n + 1} / {dash_count}")
-        double_tap(KEY_DASH)
-        wait(random.uniform(*DASH_GAP))  # gap between dashes
+    # read once per mission: the movement only changes the initial dash sequence,
+    # the family (abilities) decides what happens from ability 3 on
+    movement = settings["movement"]
+    universal = settings["family"] == "Universal"
+    blood = settings["family"] == "Blood Awakening"
 
-    set_step(2)
-    show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
-    log("Strafe")
-    double_tap(KEY_STRAFE)
+    set_step(1)
+    if movement == "Wings of Freedom":
+        log(f"Movement: Wings of Freedom - dashing for {WINGS_DASH_TIME:g}s")
+        show("Dashing", f"Spamming dash for {WINGS_DASH_TIME:g}s")
+        dash_spam_for(KEY_DASH, WINGS_DASH_TIME)
+
+        set_step(2)
+        show("Strafe", f"Strafing {KEY_STRAFE.upper()} for {WINGS_STRAFE_TIME:g}s")
+        log(f"Strafe {KEY_STRAFE.upper()} for {WINGS_STRAFE_TIME:g}s")
+        strafe_for(KEY_STRAFE, WINGS_STRAFE_TIME)
+    else:
+        dash_count = UNIVERSAL_DASH_COUNT if movement == "Universal" else DASH_COUNT
+        log(f"Dashing x{dash_count}")
+        for n in range(dash_count):
+            show("Dashing", f"Dash {n + 1} / {dash_count}")
+            double_tap(KEY_DASH)
+            wait(random.uniform(*DASH_GAP))  # gap between dashes
+
+        set_step(2)
+        show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
+        log("Strafe")
+        double_tap(KEY_STRAFE)
     wait(0.3)
 
-    set_step(3)
-    show("Ability 3")
-    log("Ability 3")
-    tap(KEY_ABILITY_2ND)  # no pause: buying time starts right away
+    if blood:
+        # Blood Awakening: no ability 3 / buying time / ability 4 - straight to the ability 5 shift
+        log("Blood Awakening: skipping to ability 5")
+    else:
+        set_step(3)
+        show("Ability 3")
+        log("Ability 3")
+        tap(KEY_ABILITY_2ND)  # no pause: buying time starts right away
 
-    if universal:
+    if blood:
+        pass
+    elif universal:
         set_step(4)
         show("Ability 4", f"Spamming ability 4 for {UNIVERSAL_ABILITY4_SPAM:g}s")
         log(f"Ability 4 spam for {UNIVERSAL_ABILITY4_SPAM:g}s")
@@ -2629,13 +2733,27 @@ class SettingsWindow(tk.Toplevel):
 
     # ----- configs tab -----
     def build_family(self, page):
+        # section 1: movements (only the initial dash sequence, before ability 4 is used)
+        self.v_movement = tk.StringVar(value=settings["movement"])
+        m = self.card(page, "MOVEMENTS",
+                      "Only changes the initial dash sequence, before ability 4 is used.")
+        m_items = [(f, f, MOVEMENT_BADGES[f], f in MOVEMENT_WIP) for f in MOVEMENTS]
+        self.movement_dd = ModernDropdown(m, m_items, settings["movement"],
+                                          self.on_movement_pick)
+        self.movement_dd.pack(fill="x")
+
+        # section 2: abilities (the family)
         self.v_family = tk.StringVar(value=settings["family"])
-        c = self.card(page, "CONFIG")
+        c = self.card(page, "ABILITIES")
         items = [(f, FAMILY_LABELS[f], FAMILY_BADGES[f], f in FAMILY_WIP) for f in FAMILIES]
         self.family_dd = ModernDropdown(c, items, settings["family"], self.on_family_pick)
         self.family_dd.pack(fill="x")
         tk.Label(c, text="Fritz and yeager not recommended", font=(App.FONT, 8),
                  fg=App.SUB, bg=App.CARD, anchor="w").pack(fill="x", pady=(8, 0))
+
+    def on_movement_pick(self, key):
+        self.v_movement.set(key)
+        self.commit()
 
     def on_family_pick(self, key):
         self.v_family.set(key)
@@ -2687,6 +2805,8 @@ class SettingsWindow(tk.Toplevel):
         wh["notify_error"] = bool(self.v_error.get())
         fam = self.v_family.get()
         settings["family"] = fam if fam in FAMILIES else DEFAULT_FAMILY
+        mov = self.v_movement.get()
+        settings["movement"] = mov if mov in MOVEMENTS else DEFAULT_MOVEMENT
         save_stats()
         # gentle warnings (it still saves what was typed)
         bad_url = bool(wh["url"]) and not webhook_url()
