@@ -10,9 +10,9 @@ Routine per mission:
      ability 4 has after ability 3
   6. Ability 4
   7. Spam ability 5 for 5 seconds -> this shifts you into the titan (abilities change),
-     then wait 22 seconds. (It keeps spamming 4 more seconds in the background, inside
-     that 22s wait, so the shift is used for sure: SHIFT_SPAM_EXTRA)
-  8. Shifted ability 4, once, then wait 4 seconds
+     then wait. (It keeps spamming 4 more seconds in the background, inside that wait,
+     so the shift is used for sure: SHIFT_SPAM_EXTRA)
+  8. 17 seconds into that wait: spam the shifted ability 4 for 6 seconds, then wait 3 seconds
   9. Press ability 5 over and over until the RETRY button shows up
 
 Flow:
@@ -25,19 +25,36 @@ Result + loot tracking:
   COMPLETED / FAILED (result_completed.png, result_failed.png) and counted.
   The loot icons are scanned at the same moment
   (loot_scroll.png, loot_body.png, loot_defence.png, loot_offence.png,
-  loot_support.png - keep them in the "image" folder next to this script) BEFORE retry is clicked.
+  loot_support.png - keep them in the "image" folder next to this script).
+  Normal quality retry button found: the loot is scanned BEFORE retry is clicked, with the normal
+  pictures.  Low quality retry button found (image/low quality fix/): only the COMPLETED / FAILED
+  result is read before the click; the loot is scanned ONLY during the 3s (LOW_LOOT_SCAN_TIME) after
+  retry was clicked, with the pictures
+  from "low quality fix" only (the normal pictures are never used then).
   Every kind that is on screen counts as 1 for that mission, whatever the number
   in its corner says.  1 scroll + 2 different fragments = "1 scroll, 2 fragments".
 
 Movement (Settings > Configs > Movements): only changes the initial dash sequence, before
-  ability 4 is used. "Shiki" = 14 dashes + strafe A, "Universal" = 12 dashes + strafe A,
+  ability 4 is used. "Shiki" = 14 dashes + strafe A, "Universal" = spam dash for 7.6s + strafe A,
   "Wings of Freedom" = spam dash for 8s, then strafe A for 4s.
 
 Family / abilities (Settings > Configs > Abilities): "Blood Awakening" skips ability 3, the
   buying time and ability 4: right after the movement it goes to the ability 5 shift, the wait,
-  shifted ability 4 and shifted ability 5.  "Universal" (WIP, not the default) does 12 dashes, then after ability 3 spams ability 4
+  shifted ability 4 and shifted ability 5.  "Universal" (WIP, not the default) then after ability 3 spams ability 4
   for 5s, strafes A once, D for 2s, A for 4s, then goes on with the ability 5 shift. "Shiki" keeps
   the routine described above (14 dashes, 15s of buying time, ability 4 once).
+
+Stuck-mission rescue:
+  If a mission runs longer than MISSION_TIMEOUT (2 minutes), something obscure went wrong after the
+  shift. The macro then clicks the middle of the screen every RESCUE_CLICK_DELAY (0.5s) until the
+  retry button shows up, and goes on as usual (result / loot scan, retry click, next mission).
+
+Low quality mode (Settings > Configs > Graphics):
+  When on, ONLY the pictures from "image/low quality fix" are used to find the retry button, the
+  loot and the mission start (the normal pictures are not even loaded). Body fragments are not
+  searched for at all in this mode (their low quality picture gives false hits - no fix for now).
+  Stop the macro to change it.
+  When off, both looks are searched (auto-detect), as before.
 
 Grabbed detection:
   When the red text YOUR STREAK IS IN DANGER (grabbed_text.png - keep it next to this
@@ -47,7 +64,8 @@ Grabbed detection:
 Install:
     pip install mss opencv-python numpy pydirectinput keyboard
     (tkinter comes with Python on Windows)
-    Keep all images in a folder called "image" next to this script.
+    Keep all images in a folder called "image" next to this script. The low graphics looks
+    (retry button, ability 2 icon, loot - same file names) go in image/low quality fix/.
     ymir_logo_app.png (header logo; text fallback if missing).
     ymir.ico (window icon; default icon if missing).
 
@@ -91,6 +109,8 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
+VERSION = "v1.1.2"        # shown in the footer, next to "Always on top"
+
 # --- Window logo (keep next to this script; falls back to the text "ymir" if missing) ---
 LOGO_FILE = "ymir_logo_app.png"
 ICON_FILE = "ymir.ico"   # window / taskbar icon (the lambda); skipped if missing
@@ -122,6 +142,8 @@ FRAGMENT_KINDS = ("body", "defence", "offence", "support")
 LOOT_THRESHOLD = 0.75     # lower it if loot is missed, raise it if you get false hits
 LOOT_SCAN_TIME = 1.0      # seconds spent looking (items can fade in) before clicking retry
 LOOT_SCAN_STEP = 0.25     # seconds between looks during that time
+LOW_LOOT_SCAN_TIME = 3.0  # low quality only: the loot is looked for ONLY during this many seconds
+                          # right after the retry click (nothing is looked for before the click)
 SAVE_LOOT_DEBUG = False    # saves last_end_scan.png with boxes around the result + loot found
 
 # --- Grabbed detection (the red YOUR STREAK IS IN DANGER text) ---
@@ -140,11 +162,17 @@ ICON_GONE_TIMEOUT = 20    # after retry, max seconds to wait for the old HUD to 
 ABILITY4_COOLDOWN = 15.0           # seconds of buying time after ability 3
 ABILITY4_COOLDOWN_MARGIN = 0.3     # tiny extra, so ability 4 is surely off cooldown
 
+# --- Stuck-mission rescue (a very rare obscure bug after the shift can leave the macro stuck) ---
+MISSION_TIMEOUT = 120.0     # a mission longer than this many seconds counts as stuck
+RESCUE_CLICK_DELAY = 0.5    # seconds between the clicks on the middle of the screen
+
 # --- Saved stats (kept between runs; the Reset button in the window erases them) ---
 STATS_FILE = "aotr_stats.json"   # saved in Documents\Ymir Macro
 STATS_FOLDER = "Ymir Macro"      # folder created inside your Documents folder
 IMAGE_FOLDER = "image"           # all images (templates, logo, icon) are loaded from this folder,
                                  # next to this script / .exe
+LOW_FOLDER = "low quality fix"   # inside the image folder: the low graphics looks of the retry button,
+                                 # the ability 2 icon and the loot (same file names as the normal ones)
 
 # --- Mission routine timings ---
 AFTER_ABILITY_DELAY = 0.6        # pause after ability 3 / 4
@@ -157,10 +185,13 @@ SHIFT_SPAM_TIME = 5.0            # after ability 4: spam ability 5 for this long
 SHIFT_SPAM_INTERVAL = 0.2        # seconds between those ability 5 presses
 SHIFT_SPAM_EXTRA = 4.0           # keeps spamming ability 5 this much longer, but INSIDE the wait below:
                                  # the macro already counts the shift as used after SHIFT_SPAM_TIME and
-                                 # starts the SHIFT_WAIT countdown, while still pressing 5 in the background
-                                 # (5s + 4s = 9s of real spamming, the total phase stays 5 + 22 seconds)
-SHIFT_WAIT = 22                  # then wait this long (the shift) before ability 4 and 5
-SHIFTED_4_TO_5_DELAY = 4.0       # after the shifted ability 4, wait this long before the ability 5 loop
+                                 # starts the wait below, while still pressing 5 in the background
+                                 # (5s + 4s = 9s of real spamming)
+SHIFTED4_SPAM_AT = 17.0          # the shift takes ~22s; this many seconds after the 5 spam, start spamming
+                                 # the shifted ability 4 (it runs past the 22s mark, that's intended)
+SHIFTED4_SPAM_TIME = 6.0         # spam the shifted ability 4 for this long
+SHIFTED4_SPAM_INTERVAL = 0.2     # seconds between those ability 4 presses
+SHIFTED_4_TO_5_DELAY = 3.0       # after the shifted ability 4 spam, wait this long, then ability 5
 ABILITY_5_CHECK_INTERVAL = 1.0   # how often to press 5 (set to its cooldown
                                  # if pressing early causes problems)
 
@@ -183,7 +214,10 @@ PAUSE_KEY = "f6"
 QUIT_KEY = "f7"   # stops the macro (the window stays open)
 
 # --- Family "Universal" routine (Shiki keeps the original routine above) ---
-UNIVERSAL_DASH_COUNT = 12          # dashes instead of DASH_COUNT
+# Universal movement dashing, copied from a recorded macro: Space spammed non-stop
+UNIVERSAL_DASH_TIME = 8.2         # seconds of spamming
+UNIVERSAL_DASH_HOLD = (0.065, 0.09)  # how long each Space press is held
+UNIVERSAL_DASH_PRESS_GAP = (0.05, 0.08)  # pause between two presses
 UNIVERSAL_ABILITY4_SPAM = 5.0      # after ability 3: spam ability 4 for this long
 UNIVERSAL_ABILITY4_INTERVAL = 0.2  # seconds between those ability 4 presses
 # then: strafe A once, strafe D for UNIVERSAL_STRAFE_D_TIME, strafe A for UNIVERSAL_STRAFE_A_TIME,
@@ -192,7 +226,7 @@ UNIVERSAL_STRAFE_D_TIME = 2.0
 UNIVERSAL_STRAFE_A_TIME = 4.0
 
 # --- Movement (Settings > Configs > Movements): only changes the initial dash sequence,
-# before ability 4 has been used.  Shiki = DASH_COUNT dashes, Universal = UNIVERSAL_DASH_COUNT
+# before ability 4 has been used.  Shiki = DASH_COUNT dashes, Universal = spam dash for UNIVERSAL_DASH_TIME
 # dashes (both followed by one strafe A), Wings of Freedom = spam dash, then strafe A.
 WINGS_DASH_TIME = 8.0            # seconds of spamming dash
 WINGS_DASH_GAP = (0.15, 0.25)    # seconds between the dashes while spamming
@@ -419,6 +453,7 @@ settings = {
     "family": DEFAULT_FAMILY,
     "movement": DEFAULT_MOVEMENT,
     "theme": DEFAULT_THEME,
+    "low_quality": False,   # True = only the "low quality fix" pictures are used
 }
 
 
@@ -464,28 +499,60 @@ def load_settings(saved):
         settings["movement"] = "Universal"   # older save: Universal used to include its dashes
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
+    if isinstance(saved.get("low_quality"), bool):
+        settings["low_quality"] = saved["low_quality"]
 
 
 # ----------------------------- hotkeys ----------------------------------
 _hotkey_handles = []
 
 
+HOTKEY_REPEAT_GAP = 0.6   # a hotkey can't fire again within this long (also ignores a held key's repeats)
+
+
 def unregister_hotkeys():
-    for handle in _hotkey_handles:
+    for kind, handle in _hotkey_handles:
         try:
-            keyboard.remove_hotkey(handle)
-        except (KeyError, ValueError):
+            if kind == "combo":
+                keyboard.remove_hotkey(handle)
+            else:
+                keyboard.unhook(handle)
+        except Exception:  # noqa: BLE001
             pass
     _hotkey_handles.clear()
 
 
+def _hotkey_handler(name, fn):
+    """Wrap a hotkey action: never raises (an exception inside a keyboard callback can kill
+    the library's listener thread, and then NO hotkey works any more) and ignores key repeats."""
+    last = [0.0]
+
+    def handler(_event=None):
+        now = time.time()
+        gap = now - last[0]
+        last[0] = now        # a held key keeps refreshing this, so its repeats never re-fire
+        if gap < HOTKEY_REPEAT_GAP:
+            return
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            log(f"Hotkey '{name}' error: {type(e).__name__}: {e}")
+    return handler
+
+
 def register_hotkeys():
-    """(Re)bind F8 / F6 / F7 - or whatever they were changed to in Settings."""
+    """(Re)bind F8 / F6 / F7 - or whatever they were changed to in Settings.
+    A single key is bound with on_press_key, so it fires whatever other keys are (or seem to
+    be) held down - add_hotkey stops working when the library thinks some key is stuck."""
     unregister_hotkeys()
     for key, fn in ((PAUSE_KEY, toggle_pause), (QUIT_KEY, request_stop),
                     (START_KEY, request_start)):
+        handler = _hotkey_handler(key, fn)
         try:
-            _hotkey_handles.append(keyboard.add_hotkey(key, fn))
+            if "+" in key and key != "+":
+                _hotkey_handles.append(("combo", keyboard.add_hotkey(key, handler)))
+            else:
+                _hotkey_handles.append(("key", keyboard.on_press_key(key, handler)))
         except (ValueError, KeyError) as e:
             log(f"Error: could not bind hotkey '{key}': {e}")
 
@@ -751,7 +818,9 @@ def start_reporter():
 # ------------------- shared state + events to the window ----------------
 ev = queue.Queue()  # macro thread -> window
 state = {"paused": False, "quit": False, "manual_start": False,
-         "phase_status": "waiting"}
+         "phase_status": "waiting",
+         "mission_t0": None,        # when the current mission began (None = no mission running)
+         "rescuing": False}         # True while the stuck-mission rescue is clicking
 stats = {"missions": 0, "retries": 0}
 loot = {kind: 0 for kind in LOOT_FILES}
 results = {"completed": 0, "failed": 0}
@@ -769,9 +838,10 @@ _last_grab = 0.0
 
 
 class RetryFound(Exception):
-    def __init__(self, match):
+    def __init__(self, match, quality="normal"):
         super().__init__("retry button found")
         self.match = match
+        self.quality = quality    # which look matched: "normal" or "low" (low graphics)
 
 
 def log(msg):
@@ -895,7 +965,7 @@ def start_macro(manual=False):
     if running():
         return
     state.update(paused=False, quit=False, manual_start=manual,
-                 phase_status="waiting")
+                 phase_status="waiting", mission_t0=None, rescuing=False)
     worker = threading.Thread(target=macro_main, daemon=True)
     worker.start()
     start_reporter()
@@ -904,10 +974,21 @@ def start_macro(manual=False):
 
 def request_start():
     if running():
-        state["manual_start"] = True
-        log("Manual start requested")
+        if state["quit"]:
+            # still shutting down after a stop: start again as soon as it has finished
+            old = worker
+
+            def restart():
+                old.join(3.0)
+                if not running():
+                    start_macro()
+            threading.Thread(target=restart, daemon=True).start()
+        elif state["phase_status"] == "waiting" and not state["paused"]:
+            state["manual_start"] = True      # F8 while waiting = start the mission now
+            log("Manual start requested")
+        # during a mission F8 does nothing (it must not leave a stale manual start behind)
     else:
-        start_macro(manual=True)
+        start_macro()    # like the Start button: waits for the ability 2 icon
 
 
 # ------------------------- screen detection -----------------------------
@@ -917,6 +998,35 @@ def load_template(filename):
     if img is None:
         raise FileNotFoundError(f"Could not load template image: {path}")
     return img
+
+
+def load_quality_templates(filename):
+    """{"normal": img, "low": img} for one template. The normal one is image/<filename>, the low
+    graphics one is image/low quality fix/<filename>. At least one of them has to exist."""
+    low_only = settings["low_quality"]      # low quality mode: the normal picture is never used
+    found = {}
+    for quality, name in (("normal", filename), ("low", os.path.join(LOW_FOLDER, filename))):
+        if low_only and quality == "normal":
+            continue
+        try:
+            found[quality] = load_template(name)
+        except FileNotFoundError:
+            pass
+    if not found:
+        shown = os.path.join(LOW_FOLDER, filename) if low_only else filename
+        raise FileNotFoundError(f"Could not load template image: {asset_path(shown)}")
+    return found
+
+
+def find_quality_template(screen_bgr, templates, threshold):
+    """Look for every look of a template. Returns (match, quality) of the best one that
+    passes the threshold, or None. The quality says which look it was ("normal" / "low")."""
+    best = None
+    for quality, tpl in templates.items():
+        m = find_template(screen_bgr, tpl, threshold)
+        if m and (best is None or m[2] > best[0][2]):
+            best = (m, quality)
+    return best
 
 
 def best_match(screen_bgr, template):
@@ -966,31 +1076,70 @@ def check_grabbed(screen):
 
 
 def icon_visible():
-    return find_template(grab_screen(), _start_template, START_THRESHOLD) is not None
+    return find_quality_template(grab_screen(), _start_template, START_THRESHOLD) is not None
 
 
 # --------------------- tick / wait (stay responsive) --------------------
-def tick(scan_retry=True):
-    """Called constantly: handles stop, pause, and retry-button detection."""
+def scan_for_retry():
+    """Look for the retry button once (and for a grab). Raises RetryFound if it is there."""
     global _last_scan
+    _last_scan = time.time()
+    screen = grab_screen()
+    check_grabbed(screen)
+    found = find_quality_template(screen, _retry_template, THRESHOLD)
+    if found:
+        match = found[0]
+        # screens often fade/animate in: look again and click only if it's
+        # still there, at the same spot
+        time.sleep(RETRY_CONFIRM_DELAY)
+        again = find_quality_template(grab_screen(), _retry_template, THRESHOLD)
+        if again and abs(again[0][0] - match[0]) <= 15 and abs(again[0][1] - match[1]) <= 15:
+            raise RetryFound(again[0], again[1])
+
+
+def rescue_clicks():
+    """Stuck mission (longer than MISSION_TIMEOUT): click the middle of the screen every
+    RESCUE_CLICK_DELAY seconds until the retry button can be seen. The retry button being
+    found raises RetryFound, so the normal end-of-mission handling takes over."""
+    state["rescuing"] = True
+    cx = _monitor["left"] + _monitor["width"] // 2
+    cy = _monitor["top"] + _monitor["height"] // 2
+    log(f"Mission is taking longer than {MISSION_TIMEOUT:g}s - clicking the middle of the "
+        "screen until retry shows up")
+    show("Stuck mission", "Clicking the middle of the screen until the retry button shows up")
+    try:
+        while True:
+            tick(scan_retry=False)                      # stop / pause
+            loop_start = time.time()
+            scan_for_retry()                            # raises RetryFound when it is visible
+            pydirectinput.moveTo(cx, cy)
+            time.sleep(0.05)
+            pydirectinput.moveRel(1, 0)
+            time.sleep(0.05)
+            pydirectinput.click()
+            end = loop_start + RESCUE_CLICK_DELAY      # click-to-click gap = exactly the delay
+            while time.time() < end:
+                tick(scan_retry=False)
+                time.sleep(0.05)
+    finally:
+        state["rescuing"] = False
+
+
+def tick(scan_retry=True):
+    """Called constantly: handles stop, pause, retry-button detection and the stuck-mission rescue."""
     if state["quit"]:
         raise SystemExit
     while state["paused"]:
         if state["quit"]:
             raise SystemExit
         time.sleep(0.1)
-    if scan_retry and time.time() - _last_scan >= SCAN_INTERVAL:
-        _last_scan = time.time()
-        screen = grab_screen()
-        check_grabbed(screen)
-        match = find_template(screen, _retry_template, THRESHOLD)
-        if match:
-            # screens often fade/animate in: look again and click only if it's
-            # still there, at the same spot
-            time.sleep(RETRY_CONFIRM_DELAY)
-            again = find_template(grab_screen(), _retry_template, THRESHOLD)
-            if again and abs(again[0] - match[0]) <= 15 and abs(again[1] - match[1]) <= 15:
-                raise RetryFound(again)
+    if scan_retry:
+        t0 = state["mission_t0"]
+        if (not state["rescuing"] and t0 is not None
+                and time.time() - t0 > MISSION_TIMEOUT):
+            rescue_clicks()
+        if time.time() - _last_scan >= SCAN_INTERVAL:
+            scan_for_retry()
 
 
 def wait(seconds, scan=True):
@@ -1006,8 +1155,20 @@ def wait(seconds, scan=True):
 # ----------------------------- inputs -----------------------------------
 def tap(key):
     pydirectinput.keyDown(key)
-    wait(random.uniform(0.03, 0.07), scan=False)
-    pydirectinput.keyUp(key)
+    try:
+        wait(random.uniform(0.03, 0.07), scan=False)   # raises SystemExit when stopped
+    finally:
+        pydirectinput.keyUp(key)   # never leave the key held down (it breaks the hotkeys)
+
+
+def release_all_keys():
+    """Best effort: let go of every key the macro presses (called when it stops)."""
+    for key in {KEY_ABILITY_1ST, KEY_ABILITY_2ND, KEY_ABILITY_3RD, KEY_ABILITY_LAST,
+                KEY_DASH, KEY_STRAFE, KEY_STRAFE_D, KEY_GRAB, KEY_BACK}:
+        try:
+            pydirectinput.keyUp(key)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def double_tap(key):
@@ -1046,24 +1207,28 @@ def gold_mask(bgr):
     return cv2.inRange(hsv, (12, 70, 150), (40, 255, 255))
 
 
-def scan_end_screen():
+def scan_end_screen(quality="normal", want_loot=True, want_result=True, scan_time=None):
     """
-    Look at the end screen for a moment.
+    Look at the end screen for a moment. Only the loot icons of the same graphics quality as
+    the retry button are looked for ("low" icons for a low graphics screen), so the two looks
+    never get mixed up.
     Returns (loot, result):
       loot   = {kind: (cx, cy, score, w, h)} for every loot icon seen
       result = ("completed" | "failed", (cx, cy, score, w, h)) or None
+    want_loot / want_result turn one of the two scans off.
     """
     loot_found = {}
     result_best = {}
-    end = time.time() + LOOT_SCAN_TIME
+    loot_tpls = _loot_templates.get(quality, {}) if want_loot else {}
+    end = time.time() + (LOOT_SCAN_TIME if scan_time is None else scan_time)
     while True:
         screen = grab_screen()
-        for kind, tpl in _loot_templates.items():
+        for kind, tpl in loot_tpls.items():
             best = best_match(screen, tpl)
             if best and best[2] >= LOOT_THRESHOLD:
                 if kind not in loot_found or best[2] > loot_found[kind][2]:
                     loot_found[kind] = best
-        if _result_templates:
+        if _result_templates and want_result:
             mask = gold_mask(screen)
             for kind, tpl in _result_templates.items():
                 th, tw = tpl.shape[:2]
@@ -1236,8 +1401,27 @@ def dash_spam_for(key, seconds):
         wait(0.05)
 
 
+def spam_recorded_dash(key, seconds):
+    """Universal movement: Space pressed over and over with the timings of a recorded macro
+    (each press held ~65-90 ms, ~50-80 ms between presses)."""
+    end = time.time() + seconds
+    while True:
+        remaining = end - time.time()
+        if remaining <= 0:
+            return
+        show("Dashing", f"Spamming dash... {remaining:.0f}s left")
+        pydirectinput.keyDown(key)
+        try:
+            wait(random.uniform(*UNIVERSAL_DASH_HOLD), scan=False)
+        finally:
+            pydirectinput.keyUp(key)
+        wait(random.uniform(*UNIVERSAL_DASH_PRESS_GAP), scan=False)
+
+
 # ---------------------------- the routine -------------------------------
 def run_mission():
+    state["manual_start"] = False   # a mission is running now: forget any leftover F8 press
+    state["mission_t0"] = time.time()   # for the stuck-mission rescue (MISSION_TIMEOUT)
     stats["missions"] += 1
     push_stats()
     ev.put(("mission_started",))
@@ -1265,11 +1449,18 @@ def run_mission():
         show("Strafe", f"Strafing {KEY_STRAFE.upper()} for {WINGS_STRAFE_TIME:g}s")
         log(f"Strafe {KEY_STRAFE.upper()} for {WINGS_STRAFE_TIME:g}s")
         strafe_for(KEY_STRAFE, WINGS_STRAFE_TIME)
+    elif movement == "Universal":
+        log(f"Movement: Universal - spamming dash for {UNIVERSAL_DASH_TIME:g}s")
+        spam_recorded_dash(KEY_DASH, UNIVERSAL_DASH_TIME)
+
+        set_step(2)
+        show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
+        log("Strafe")
+        double_tap(KEY_STRAFE)
     else:
-        dash_count = UNIVERSAL_DASH_COUNT if movement == "Universal" else DASH_COUNT
-        log(f"Dashing x{dash_count}")
-        for n in range(dash_count):
-            show("Dashing", f"Dash {n + 1} / {dash_count}")
+        log(f"Dashing x{DASH_COUNT}")
+        for n in range(DASH_COUNT):
+            show("Dashing", f"Dash {n + 1} / {DASH_COUNT}")
             double_tap(KEY_DASH)
             wait(random.uniform(*DASH_GAP))  # gap between dashes
 
@@ -1325,14 +1516,14 @@ def run_mission():
     while time.time() < spam_end:
         tap(KEY_ABILITY_LAST)
         wait(SHIFT_SPAM_INTERVAL)
-    log(f"Waiting {SHIFT_WAIT}s for the shift")
-    shift_end = time.time() + SHIFT_WAIT
+    log(f"Waiting {SHIFTED4_SPAM_AT:g}s for the shift (then shifted ability 4)")
+    shift_end = time.time() + SHIFTED4_SPAM_AT
     extra_end = time.time() + SHIFT_SPAM_EXTRA   # still pressing 5 quietly during the first seconds of the wait
     while True:
         remaining = shift_end - time.time()
         if remaining <= 0:
             break
-        show("Shift", f"Waiting for the shift to finish... {remaining:.0f}s")
+        show("Shift", f"Waiting for the shift... {remaining:.0f}s")
         if time.time() < extra_end:
             tap(KEY_ABILITY_LAST)
             wait(min(SHIFT_SPAM_INTERVAL, remaining))
@@ -1340,9 +1531,9 @@ def run_mission():
             wait(min(0.5, remaining))
 
     set_step(7)
-    show("Shifted ability 4", "Ability 4 once, now that we've shifted")
-    log("Ability 4 (shifted)")
-    tap(KEY_ABILITY_3RD)
+    log(f"Shifted ability 4 spam for {SHIFTED4_SPAM_TIME:g}s")
+    spam_key_for(KEY_ABILITY_3RD, SHIFTED4_SPAM_TIME, SHIFTED4_SPAM_INTERVAL,
+                 "shifted ability 4")
     show("Shifted ability 4", f"Waiting {SHIFTED_4_TO_5_DELAY:g}s before ability 5")
     wait(SHIFTED_4_TO_5_DELAY)
 
@@ -1360,8 +1551,8 @@ def run_mission():
 def macro_main():
     global _sct, _monitor, _retry_template, _start_template, _grab_template
     try:
-        _retry_template = load_template(TEMPLATE_FILE)
-        _start_template = load_template(START_TEMPLATE_FILE)
+        _retry_template = load_quality_templates(TEMPLATE_FILE)
+        _start_template = load_quality_templates(START_TEMPLATE_FILE)
         _grab_template = None
         if GRAB_ENABLED:
             try:
@@ -1376,11 +1567,25 @@ def macro_main():
                 log(f"Result: {filename} not found - skipping {kind}")
         _loot_templates.clear()
         if LOOT_ENABLED:
-            for kind, filename in LOOT_FILES.items():
-                try:
-                    _loot_templates[kind] = load_template(filename)
-                except FileNotFoundError:
-                    log(f"Loot: {filename} not found - skipping {kind}")
+            for quality, folder in (("normal", ""), ("low", LOW_FOLDER)):
+                if settings["low_quality"] and quality == "normal":
+                    continue        # low quality mode: only the low quality pictures
+                _loot_templates[quality] = {}
+                for kind, filename in LOOT_FILES.items():
+                    if settings["low_quality"] and kind == "body":
+                        continue    # low quality mode: body fragments are not searched at all
+                    try:
+                        _loot_templates[quality][kind] = load_template(
+                            os.path.join(folder, filename))
+                    except FileNotFoundError:
+                        if quality == "normal" or any(
+                                os.path.exists(asset_path(os.path.join(LOW_FOLDER, f)))
+                                for f in LOOT_FILES.values()):
+                            tag = "" if quality == "normal" else " (low quality)"
+                            log(f"Loot{tag}: {filename} not found - skipping {kind}")
+        if settings["low_quality"]:
+            log("Low quality mode: using only the pictures from the low quality fix folder "
+                "(body fragments are not checked)")
         log("Started. Click into Roblox; the routine starts when the mission begins.")
 
         with mss.mss() as sct:
@@ -1399,30 +1604,52 @@ def macro_main():
                         after_retry = False
                     run_mission()
                 except RetryFound as r:
+                    state["mission_t0"] = None     # the mission is over (no rescue needed)
                     cx, cy, score, tw, th = r.match
                     abs_x = _monitor["left"] + cx
                     abs_y = _monitor["top"] + cy
                     ev.put(("mission_ended",))
                     set_status("retrying")
                     set_step(-1)
-                    log(f"Retry found (score {score:.2f})")
+                    log(f"Retry found ({r.quality} quality, score {score:.2f})")
+                    low = r.quality == "low"
                     loot_found, result = {}, None
-                    if _loot_templates or _result_templates:
-                        show("Retry found", "Checking the result and loot...")
-                        loot_found, result = scan_end_screen()
+                    loot_on = bool(_loot_templates.get(r.quality))   # loot icons of THIS quality
+                    # normal quality: result + loot are read before the click.
+                    # low quality: only the result now, the loot after the click (see below)
+                    if _result_templates or (loot_on and not low):
+                        show("Retry found", "Checking the result and loot..."
+                             if not low else "Checking the result...")
+                        loot_found, result = scan_end_screen(
+                            r.quality, want_loot=not low, want_result=True)
                         if _result_templates:
                             record_result(result)
-                        if _loot_templates:
+                        if loot_on and not low:
                             record_loot(loot_found)
-                    notify_mission_async(result, loot_found)   # Discord stats embed (if on)
+                    if not low:
+                        notify_mission_async(result, loot_found)   # Discord stats embed (if on)
                     show("Retry found", "Clicking...")
                     log("Clicking retry")
                     save_click_debug(cx, cy, tw, th)
                     click_at(abs_x, abs_y, tw, th)
+                    clicked_at = time.time()
                     stats["retries"] += 1
                     push_stats()
-                    log(f"Hands off for {AFTER_CLICK_DELAY}s, then waiting for the next mission")
-                    hands_off_wait(AFTER_CLICK_DELAY)
+                    if low:
+                        if loot_on:
+                            show("Checking loot", f"Low quality: looking for the loot for "
+                                                  f"{LOW_LOOT_SCAN_TIME:g}s after the click")
+                            log(f"Low quality: checking the loot for {LOW_LOOT_SCAN_TIME:g}s "
+                                "after the retry click")
+                            loot_found, _ = scan_end_screen(
+                                r.quality, want_loot=True, want_result=False,
+                                scan_time=LOW_LOOT_SCAN_TIME)
+                            record_loot(loot_found)
+                        notify_mission_async(result, loot_found)
+                    # the loot scan above counts as part of the hands-off time
+                    left = max(0.0, AFTER_CLICK_DELAY - (time.time() - clicked_at))
+                    log(f"Hands off for {left:.0f}s more, then waiting for the next mission")
+                    hands_off_wait(left)
                     wait_for_icon_gone()
                     after_retry = True
                     need_start = True
@@ -1433,6 +1660,8 @@ def macro_main():
         if settings["webhook"]["notify_error"]:
             notify_async(f"ymir stopped because of an error: {type(e).__name__}: {e}")
     finally:
+        state["mission_t0"] = None
+        release_all_keys()
         ev.put(("done",))
 
 
@@ -1999,6 +2228,8 @@ class App:
                        bg=self.BG, cursor="hand2")
         lbl.pack(side="left", padx=(8, 0))
         lbl.bind("<Button-1>", sw.flip)
+        tk.Label(left, text=VERSION, font=(App.FONT, 9), fg=self.SUB,
+                 bg=self.BG).pack(side="left", padx=(14, 0))
 
         self.reset_btn = tk.Label(foot, text="Reset stats", font=(App.FONT, 9),
                                   fg=self.SUB, bg=self.BG, cursor="hand2")
@@ -2750,6 +2981,24 @@ class SettingsWindow(tk.Toplevel):
         self.family_dd.pack(fill="x")
         tk.Label(c, text="Fritz and yeager not recommended", font=(App.FONT, 8),
                  fg=App.SUB, bg=App.CARD, anchor="w").pack(fill="x", pady=(8, 0))
+
+        # section 3: graphics
+        self.v_lowq = tk.BooleanVar(value=settings["low_quality"])
+        g = self.card(page, "GRAPHICS",
+                      "Turn this on if you play on low graphics. It uses ONLY the pictures in "
+                      "image/low quality fix to find the retry button, the loot and the "
+                      "mission start. Body fragments are NOT checked in this mode (no fix "
+                      "for the false detections yet).")
+        self.check(g, "Low quality mode", self.v_lowq, self.on_lowq_toggle)
+
+    def on_lowq_toggle(self):
+        if running():
+            self.v_lowq.set(not self.v_lowq.get())      # put the switch back
+            self.say("Stop the macro before changing low quality mode.", error=True)
+            return
+        settings["low_quality"] = bool(self.v_lowq.get())
+        save_stats()
+        self.say("Low quality mode " + ("on" if settings["low_quality"] else "off"), good=True)
 
     def on_movement_pick(self, key):
         self.v_movement.set(key)
