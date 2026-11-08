@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="100" viewBox="0 0 520 100" role="img" aria-labelledby="title">
+  <title id="title">GODFORGED</title>
+  <defs>
+    <linearGradient id="textGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9bd3ff"/>
+      <stop offset="48%" stop-color="#789cf5"/>
+      <stop offset="100%" stop-color="#c58aff"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-30%" width="120%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2.2" result="blur"/>
+      <feOffset dy="3" result="offset"/>
+      <feColorMatrix in="offset" type="matrix" values="0 0 0 0 0.12  0 0 0 0 0.10  0 0 0 0 0.28  0 0 0 0.32 0" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <text x="260" y="72" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="68" font-weight="700" letter-spacing="1.5"
+        fill="url(#textGradient)" filter="url(#softShadow)">GODFORGED</text>
+</svg>
