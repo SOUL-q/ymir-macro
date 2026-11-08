@@ -9,13 +9,22 @@ AOTR mission macro with a clean status window. Uses external keyboard/mouse inpu
 - Optional Discord webhook: stats after every mission, periodic stats graph, error pings
 - Configs: **Shiki**, **Universal** (WIP), **Blood Awakening** (WIP)
 - Rebindable hotkeys and in-game keys in Settings
-- Themes (Settings > Themes): Default, Violet, Rose, Ember, Terminal, Ocean - applied instantly
-- 
+
+### Supports various themes
+![image](documentation/themes.png)
+
 ### Adapts to different types of movements
 ![image](documentation/movements.png)
 
 ### Adapts to different types of playstyles
 ![image](documentation/abilities.png)
+
+## Builds/layout (Important
+ ### shiki:
+![image](documentation/layout_shiki.png)
+ ### Blood awakening:
+![image](documentation/layout_blood.png)
+
 
 ## Requirements
 - Windows, Python 3.10+
