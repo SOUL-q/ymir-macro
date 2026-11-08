@@ -10,6 +10,12 @@ AOTR mission macro with a clean status window. Uses external keyboard/mouse inpu
 - Configs: **Shiki**, **Universal** (WIP), **Blood Awakening** (WIP)
 - Rebindable hotkeys and in-game keys in Settings
 - Themes (Settings > Themes): Default, Violet, Rose, Ember, Terminal, Ocean - applied instantly
+- 
+### Adapts to different types of movements
+![image](documentation/movement.png)
+
+### Adapts to different types of playstyles
+![image](documentation/abilities.png)
 
 ## Requirements
 - Windows, Python 3.10+
