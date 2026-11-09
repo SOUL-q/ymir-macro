@@ -44,10 +44,17 @@ Family / abilities (Settings > Configs > Abilities): "Blood Awakening" skips abi
   for 5s, strafes A once, D for 2s, A for 4s, then goes on with the ability 5 shift. "Shiki" keeps
   the routine described above (14 dashes, 15s of buying time, ability 4 once).
 
+Updates (footer > Updates):
+  Looks at the latest GitHub release of UPDATE_REPO (also once at start). If its tag is newer than
+  VERSION it asks to install it: the .exe attached to the release is downloaded, checked, and
+  swapped in for the running .exe, then the macro restarts. Running the plain .py only opens the
+  release page. Only works while the macro is stopped.
+
 Stuck-mission rescue:
   If a mission runs longer than MISSION_TIMEOUT (2 minutes), something obscure went wrong after the
-  shift. The macro then clicks the middle of the screen every RESCUE_CLICK_DELAY (0.5s) until the
-  retry button shows up, and goes on as usual (result / loot scan, retry click, next mission).
+  shift. The macro then presses ctrl, moves the mouse down for 2s and presses ctrl again (the
+  character looks at the ground), and clicks the middle of the screen every RESCUE_CLICK_DELAY
+  (0.5s) until the retry button shows up, and goes on as usual (result / loot scan, retry click, next mission).
 
 Low quality mode (Settings > Configs > Graphics):
   When on, ONLY the pictures from "image/low quality fix" are used to find the retry button, the
@@ -89,10 +96,14 @@ import base64
 import ctypes
 import json
 import os
+import hashlib
 import queue
 import random
+import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -100,7 +111,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 import cv2
 import keyboard
@@ -109,7 +120,13 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.1.2"        # shown in the footer, next to "Always on top"
+VERSION = "v1.1.3"        # release version tag
+                          # (shown in the footer, next to "Always on top")
+
+# --- Update checker (footer > Updates) ---
+UPDATE_REPO = "SOUL-q/ymir-macro"   # <-- your GitHub "owner/repo" (public). Releases are read from it
+UPDATE_CHECK_ON_START = True       # look for a newer release a moment after the window opens
+UPDATE_TIMEOUT = 15                # seconds before a GitHub request is given up
 
 # --- Window logo (keep next to this script; falls back to the text "ymir" if missing) ---
 LOGO_FILE = "ymir_logo_app.png"
@@ -165,6 +182,12 @@ ABILITY4_COOLDOWN_MARGIN = 0.3     # tiny extra, so ability 4 is surely off cool
 # --- Stuck-mission rescue (a very rare obscure bug after the shift can leave the macro stuck) ---
 MISSION_TIMEOUT = 120.0     # a mission longer than this many seconds counts as stuck
 RESCUE_CLICK_DELAY = 0.5    # seconds between the clicks on the middle of the screen
+# Before clicking, the character is forced to look at the ground: press ctrl, move the mouse down
+# for LOOK_DOWN_TIME seconds, press ctrl again.
+LOOK_DOWN_KEY = "ctrl"
+LOOK_DOWN_TIME = 2.0        # seconds the mouse is moved down
+LOOK_DOWN_STEP = 0.01       # seconds between two small downward mouse movements
+LOOK_DOWN_PIXELS = 15       # pixels moved down per step (relative movement, works in a locked mouse)
 
 # --- Saved stats (kept between runs; the Reset button in the window erases them) ---
 STATS_FILE = "aotr_stats.json"   # saved in Documents\Ymir Macro
@@ -1097,26 +1120,67 @@ def scan_for_retry():
             raise RetryFound(again[0], again[1])
 
 
+def _mouse_move_down(pixels):
+    """Relative mouse movement (what a locked mouse in Roblox needs to turn the camera)."""
+    ctypes.windll.user32.mouse_event(0x0001, 0, int(pixels), 0, 0)   # MOUSEEVENTF_MOVE
+
+
+def look_down(check):
+    """Press ctrl, move the mouse down for LOOK_DOWN_TIME seconds, press ctrl again.
+    `check` is called all the time (stop / pause handling, may raise SystemExit)."""
+    def press_ctrl():
+        pydirectinput.keyDown(LOOK_DOWN_KEY)
+        try:
+            end = time.time() + 0.06
+            while time.time() < end:
+                check()
+                time.sleep(0.01)
+        finally:
+            pydirectinput.keyUp(LOOK_DOWN_KEY)
+
+    press_ctrl()
+    end = time.time() + 0.15                 # let the cursor lock before moving
+    while time.time() < end:
+        check()
+        time.sleep(0.01)
+    end = time.time() + LOOK_DOWN_TIME
+    while time.time() < end:
+        check()
+        _mouse_move_down(LOOK_DOWN_PIXELS)
+        time.sleep(LOOK_DOWN_STEP)
+    press_ctrl()
+    end = time.time() + 0.15                 # let the cursor unlock before clicking
+    while time.time() < end:
+        check()
+        time.sleep(0.01)
+
+
+def click_middle(cx, cy):
+    pydirectinput.moveTo(cx, cy)
+    time.sleep(0.05)
+    pydirectinput.moveRel(1, 0)
+    time.sleep(0.05)
+    pydirectinput.click()
+
+
 def rescue_clicks():
-    """Stuck mission (longer than MISSION_TIMEOUT): click the middle of the screen every
-    RESCUE_CLICK_DELAY seconds until the retry button can be seen. The retry button being
-    found raises RetryFound, so the normal end-of-mission handling takes over."""
+    """Stuck mission (longer than MISSION_TIMEOUT): look at the ground (ctrl, mouse down for 2s,
+    ctrl), then click the middle of the screen every RESCUE_CLICK_DELAY seconds until the retry
+    button can be seen. The retry button being found raises RetryFound, so the normal
+    end-of-mission handling takes over."""
     state["rescuing"] = True
     cx = _monitor["left"] + _monitor["width"] // 2
     cy = _monitor["top"] + _monitor["height"] // 2
-    log(f"Mission is taking longer than {MISSION_TIMEOUT:g}s - clicking the middle of the "
-        "screen until retry shows up")
-    show("Stuck mission", "Clicking the middle of the screen until the retry button shows up")
+    log(f"Mission is taking longer than {MISSION_TIMEOUT:g}s - looking at the ground, then "
+        "clicking the middle of the screen until retry shows up")
+    show("Stuck mission", "Looking at the ground, then clicking the middle of the screen")
     try:
+        look_down(lambda: tick(scan_retry=False))
         while True:
             tick(scan_retry=False)                      # stop / pause
             loop_start = time.time()
             scan_for_retry()                            # raises RetryFound when it is visible
-            pydirectinput.moveTo(cx, cy)
-            time.sleep(0.05)
-            pydirectinput.moveRel(1, 0)
-            time.sleep(0.05)
-            pydirectinput.click()
+            click_middle(cx, cy)
             end = loop_start + RESCUE_CLICK_DELAY      # click-to-click gap = exactly the delay
             while time.time() < end:
                 tick(scan_retry=False)
@@ -1929,6 +1993,137 @@ def style_title_bar(root, bg_hex):
         pass
 
 
+# ------------------------------- updater --------------------------------
+_update = {"busy": False}
+
+
+def parse_version(text):
+    """'v1.1.2' -> (1, 1, 2, 0) so versions can be compared."""
+    nums = [int(n) for n in re.findall(r"\d+", str(text))][:4]
+    return tuple(nums + [0] * (4 - len(nums)))
+
+
+def update_repo_ok():
+    return bool(re.fullmatch(r"[\w.-]+/[\w.-]+", UPDATE_REPO)) and "REPO_NAME" not in UPDATE_REPO
+
+
+def fetch_latest_release():
+    """Ask GitHub for the latest (non-draft, non-prerelease) release of UPDATE_REPO."""
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
+        headers={"User-Agent": "ymir-macro-updater", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=UPDATE_TIMEOUT) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    info = {"tag": str(data.get("tag_name", "")),
+            "page": data.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases",
+            "url": None, "size": None, "digest": None}
+    prefix = f"https://github.com/{UPDATE_REPO}/releases/download/"
+    for a in data.get("assets", []):
+        url = a.get("browser_download_url", "")
+        if a.get("name", "").lower().endswith(".exe") and url.startswith(prefix):
+            info.update(url=url, size=a.get("size"), digest=a.get("digest"))
+            break
+    return info
+
+
+def _update_check_worker(manual):
+    info, error = None, None
+    try:
+        info = fetch_latest_release()
+    except urllib.error.HTTPError as e:
+        error = "no release found on GitHub" if e.code == 404 else f"GitHub answered {e.code}"
+    except Exception as e:  # noqa: BLE001  (no internet, timeout, bad json ...)
+        error = f"{type(e).__name__}: {e}"
+    ev.put(("update_result", manual, info, error))
+
+
+def start_update_check(manual=False):
+    if _update["busy"]:
+        return
+    if not update_repo_ok():
+        if manual:
+            log("Error: update checker - set UPDATE_REPO (owner/repo) at the top of the script")
+        return
+    _update["busy"] = True
+    if manual:
+        log("Checking for updates...")
+    threading.Thread(target=_update_check_worker, args=(manual,), daemon=True).start()
+
+
+def _install_update_worker(info):
+    """Download the new .exe next to the running one, check it, then hand over to a small .bat
+    that waits for this program to close, swaps the files and starts the new version."""
+    exe = sys.executable
+    new_path = exe + ".new"
+    try:
+        log(f"Downloading {info['tag']}...")
+        req = urllib.request.Request(info["url"], headers={"User-Agent": "ymir-macro-updater"})
+        sha = hashlib.sha256()
+        done, last_pct = 0, -1
+        with urllib.request.urlopen(req, timeout=UPDATE_TIMEOUT) as r, open(new_path, "wb") as f:
+            total = int(r.headers.get("Content-Length") or info.get("size") or 0)
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                f.write(chunk)
+                sha.update(chunk)
+                done += len(chunk)
+                if total:
+                    pct = done * 100 // total // 20 * 20
+                    if pct != last_pct:
+                        last_pct = pct
+                        log(f"Downloading update... {pct}%")
+        # make sure it is the whole, real file
+        if info.get("size") and done != info["size"]:
+            raise RuntimeError(f"incomplete download ({done} of {info['size']} bytes)")
+        with open(new_path, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise RuntimeError("the downloaded file is not a Windows program")
+        digest = str(info.get("digest") or "")
+        if digest.startswith("sha256:") and digest[7:].lower() != sha.hexdigest():
+            raise RuntimeError("the download does not match GitHub's checksum")
+
+        q = lambda path: path.replace("%", "%%")      # % is special inside a .bat
+        bat = os.path.join(tempfile.gettempdir(), "ymir_update.bat")
+        with open(bat, "w", encoding="mbcs", errors="replace", newline="\r\n") as f:
+            f.write("\n".join([
+                "@echo off",
+                "set _MEIPASS2=",
+                "set PYINSTALLER_RESET_ENVIRONMENT=1",
+                f'cd /d "{q(os.path.dirname(exe))}"',
+                "set /a n=0",
+                ":wait",
+                "set /a n+=1",
+                f'move /y "{q(new_path)}" "{q(exe)}" >nul 2>&1',
+                "if not errorlevel 1 goto done",
+                "if %n% geq 60 goto end",
+                "ping -n 2 127.0.0.1 >nul",
+                "goto wait",
+                ":done",
+                f'start "" "{q(exe)}"',
+                ":end",
+                '(goto) 2>nul & del "%~f0"',
+            ]) + "\n")
+        env = {k: v for k, v in os.environ.items() if k != "_MEIPASS2"}
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        subprocess.Popen(["cmd", "/c", bat], env=env, close_fds=True,
+                         creationflags=0x08000000 | 0x00000008)   # no window, detached
+        log("Update downloaded - restarting...")
+        ev.put(("update_ready",))
+    except Exception as e:  # noqa: BLE001
+        log(f"Error: update failed - {type(e).__name__}: {e}")
+        try:
+            os.remove(new_path)
+        except OSError:
+            pass
+        _update["busy"] = False
+
+
+def install_update(info):
+    threading.Thread(target=_install_update_worker, args=(info,), daemon=True).start()
+
+
 class App:
     BG = "#0b0e14"
     CARD = "#11151e"
@@ -1990,6 +2185,8 @@ class App:
         style_title_bar(root, self.BG)
         root.deiconify()
         self.pump()
+        if UPDATE_CHECK_ON_START:
+            root.after(1500, start_update_check)
 
     # ----- (re)building the window, themes -----
     def apply_styles(self):
@@ -2230,6 +2427,12 @@ class App:
         lbl.bind("<Button-1>", sw.flip)
         tk.Label(left, text=VERSION, font=(App.FONT, 9), fg=self.SUB,
                  bg=self.BG).pack(side="left", padx=(14, 0))
+        upd = tk.Label(left, text="\u21bb  Updates", font=(App.FONT, 9), fg=self.SUB,
+                       bg=self.BG, cursor="hand2")
+        upd.pack(side="left", padx=(14, 0))
+        upd.bind("<Button-1>", lambda _e: start_update_check(manual=True))
+        upd.bind("<Enter>", lambda _e: upd.configure(fg=self.TEXT))
+        upd.bind("<Leave>", lambda _e: upd.configure(fg=self.SUB))
 
         self.reset_btn = tk.Label(foot, text="Reset stats", font=(App.FONT, 9),
                                   fg=self.SUB, bg=self.BG, cursor="hand2")
@@ -2341,6 +2544,10 @@ class App:
         elif kind == "settings_msg":
             if self.settings_win:
                 self.settings_win.say(e[1], error=e[2], good=e[3])
+        elif kind == "update_result":
+            self.on_update_result(e[1], e[2], e[3])
+        elif kind == "update_ready":
+            self.on_close()          # the .bat swaps the files and starts the new version
         elif kind == "mission_started":
             self.mission_t0 = time.time()
         elif kind == "mission_ended":
@@ -2374,6 +2581,33 @@ class App:
         elif self.mission_last is not None:
             self.stat_labels["mission_time"].configure(text=fmt_time(self.mission_last))
         self.root.after(100, self.pump)
+
+    def on_update_result(self, manual, info, error):
+        _update["busy"] = False
+        if error:
+            if manual:
+                log(f"Error: update check failed - {error}")
+            return
+        if not info or parse_version(info["tag"]) <= parse_version(VERSION):
+            if manual:
+                log(f"You are on the latest version ({VERSION})")
+            return
+        log(f"Update available: {info['tag']} (you have {VERSION})")
+        if running():
+            log("Stop the macro first, then click Updates to install it")
+            return
+        if not getattr(sys, "frozen", False) or not info["url"]:
+            # plain .py (or a release without an .exe): just open the release page
+            if messagebox.askyesno("Update available",
+                                   f"{info['tag']} is available (you have {VERSION}).\n\n"
+                                   "Open the release page?", parent=self.root):
+                webbrowser.open(info["page"])
+            return
+        if messagebox.askyesno("Update available",
+                               f"{info['tag']} is available (you have {VERSION}).\n\n"
+                               "Download it and restart the macro now?", parent=self.root):
+            _update["busy"] = True
+            install_update(info)
 
     def open_settings(self):
         if self.settings_win is not None:
