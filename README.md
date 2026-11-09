@@ -39,6 +39,15 @@ Made with love and passion.
 - Use your best Shifter Build for colossal titan. Avoid Tatsujin/Flashsteps/Wings of freedom
 - If you use wings of freedom select that in config
 
+### Fritz <img src="documentation/beta.svg" height="16" alt="Beta"> :
+![image](documentation/fritz_layout.png)
+
+![image](documentation/fritz_config.png)
+- Recommended to use  <img src="documentation/godforged.svg" height="18" alt="GODFORGED"> and <img src="documentation/avatar-of-ymir.svg" height="20" alt="AOY">
+- Still in testing so dont expect good results yet
+- Recommended to use Afterimages
+- Currently the mission completion is very slow
+- Expect the macro to shift AFTER reviving 60% of the time wasting a lot of time
 
 ## Requirements
 - Windows, Python 3.10+
