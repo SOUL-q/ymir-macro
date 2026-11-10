@@ -1,7 +1,7 @@
 ![image](image/ymir_logo_app.png)
 
 AOT:R mission macro with a clean status window. Uses external keyboard/mouse input only. Only does Outskirts : Skirmish, must have Colossal serum.
-Made with love and passion.
+Made with love and passion. Watch the Explanation [here](https://www.youtube.com/feed/history).
 
 ## Features
 - Automatic mission routine (abilities, dashes, strafes, shift) with RETRY detection
