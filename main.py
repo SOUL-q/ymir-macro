@@ -13,8 +13,9 @@ Routine per mission:
      then wait. (It keeps spamming 4 more seconds in the background, inside that wait,
      so the shift is used for sure: SHIFT_SPAM_EXTRA)
   8. 17 seconds into that wait: spam the shifted ability 4 for 8 seconds, then wait 3 seconds
-  9. Press ability 5 over and over while HOLDING D, until the RETRY button shows up (or the
-     mission passes MISSION_TIMEOUT, 2m30s - then D is released and the stuck-mission rescue starts)
+  9. Press ability 5 over and over while HOLDING the "Move while shifted" direction (Right = D,
+     Left = A, Stand = nothing; Settings > Configs), until the RETRY button shows up (or the
+     mission passes MISSION_TIMEOUT, 2m30s - then the key is released and the stuck-mission rescue starts)
 
 Flow:
   - The mission counts as started when the ability-2 icon (mission_start.png) shows up.
@@ -35,6 +36,13 @@ Result + loot tracking:
   from "low quality fix" only (the normal pictures are never used then).
   Every kind that is on screen counts as 1 for that mission, whatever the number
   in its corner says.  1 scroll + 2 different fragments = "1 scroll, 2 fragments".
+
+Fix retry (Settings > Configs > Fix retry):
+  For when the retry button is not detected. Instead of looking for the button, the macro looks for
+  the words COMPLETED / FAILED (result_completed.png / result_failed.png). Once one is visible it
+  waits 2 seconds (FIX_RETRY_WAIT, the result + loot are read during that time) and then clicks the
+  position you picked in Settings (press "Set position", then click the retry button - the click is
+  captured). The position is saved in the json next to the other settings.
 
 Movement (Settings > Configs > Movements): only changes the initial dash sequence, before
   ability 4 is used. "Shiki" = 14 dashes + strafe A, "Universal" = spam dash for 7.6s + strafe A,
@@ -137,7 +145,7 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.2.3"        # release version tag
+VERSION = "v1.2.4"        # release version tag
                           # (shown in the footer, next to "Always on top")
 
 # --- Update checker (footer > Updates) ---
@@ -171,6 +179,7 @@ SAVE_CLICK_DEBUG = False   # saves last_retry_click.png showing exactly where it
 # --- Mission result detection (the gold COMPLETED / FAILED text on the end screen) ---
 RESULT_FILES = {"completed": "result_completed.png", "failed": "result_failed.png"}
 RESULT_THRESHOLD = 0.70   # lower it if results aren't detected
+FIX_RETRY_WAIT = 2.0      # "Fix retry": seconds between seeing COMPLETED / FAILED and the click
 
 # --- Loot detection (looked for on the end screen, right before clicking retry) ---
 LOOT_ENABLED = True
@@ -299,6 +308,13 @@ WINGS_DASH_GAP = (0.15, 0.25)    # seconds between the dashes while spamming
 WINGS_STRAFE_TIME = 4.0          # seconds of strafing A afterwards
 
 # --- Settings window ---
+MOVE_SHIFTED_OPTIONS = ("Left", "Right", "Stand")   # "Move while shifted" (step 9)
+DEFAULT_MOVE_SHIFTED = "Right"
+MOVE_SHIFTED_BADGES = {
+    "Left":  ("L", "#3b82f6", "#ffffff"),
+    "Right": ("R", "#14b8a6", "#ffffff"),
+    "Stand": ("S", "#7a8398", "#ffffff"),
+}
 MOVEMENTS = ("Shiki", "Universal", "Wings of Freedom")
 DEFAULT_MOVEMENT = "Shiki"
 MOVEMENT_TAGS = {}               # entry -> tag text in the dropdown ("WIP" yellow, "Beta" blue)
@@ -521,6 +537,10 @@ settings = {
     "movement": DEFAULT_MOVEMENT,
     "theme": DEFAULT_THEME,
     "low_quality": False,   # True = only the "low quality fix" pictures are used
+    "move_shifted": DEFAULT_MOVE_SHIFTED,   # direction held at step 9: Left (A) / Right (D) / Stand
+    "fix_retry": False,     # True = end of mission is read from COMPLETED / FAILED, retry is clicked
+                            # at fix_retry_pos
+    "fix_retry_pos": None,  # [x, y] screen pixels picked by the user (None = not set yet)
 }
 
 
@@ -568,6 +588,14 @@ def load_settings(saved):
         settings["theme"] = saved["theme"]
     if isinstance(saved.get("low_quality"), bool):
         settings["low_quality"] = saved["low_quality"]
+    if saved.get("move_shifted") in MOVE_SHIFTED_OPTIONS:
+        settings["move_shifted"] = saved["move_shifted"]
+    if isinstance(saved.get("fix_retry"), bool):
+        settings["fix_retry"] = saved["fix_retry"]
+    pos = saved.get("fix_retry_pos")
+    if (isinstance(pos, (list, tuple)) and len(pos) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in pos)):
+        settings["fix_retry_pos"] = [pos[0], pos[1]]
 
 
 # ----------------------------- hotkeys ----------------------------------
@@ -962,10 +990,12 @@ class FritzNotShifted(Exception):
 
 
 class RetryFound(Exception):
-    def __init__(self, match, quality="normal"):
+    def __init__(self, match, quality="normal", kind=None):
         super().__init__("retry button found")
         self.match = match
-        self.quality = quality    # which look matched: "normal" or "low" (low graphics)
+        self.quality = quality    # which look matched: "normal" or "low" (low graphics),
+                                  # or "fix" (Fix retry: the COMPLETED / FAILED text was seen)
+        self.kind = kind          # "completed" / "failed" (Fix retry only)
 
 
 def log(msg):
@@ -1283,12 +1313,43 @@ def find_retry(screen):
     return None
 
 
+def fix_retry_active():
+    """Fix retry is on, a click position is saved and the result pictures are loaded."""
+    return bool(settings["fix_retry"] and settings["fix_retry_pos"] and _result_templates)
+
+
+def find_result(screen):
+    """The COMPLETED / FAILED text on screen: (kind, (cx, cy, score, w, h)) or None."""
+    if not _result_templates:
+        return None
+    mask = gold_mask(screen)
+    best = None
+    for kind, tpl in _result_templates.items():
+        th, tw = tpl.shape[:2]
+        if th > mask.shape[0] or tw > mask.shape[1]:
+            continue
+        res = cv2.matchTemplate(mask, tpl, cv2.TM_CCOEFF_NORMED)
+        _, score, _, loc = cv2.minMaxLoc(res)
+        if score >= relax(RESULT_THRESHOLD) and (best is None or score > best[1][2]):
+            best = (kind, (loc[0] + tw // 2, loc[1] + th // 2, score, tw, th))
+    return best
+
+
 def scan_for_retry():
-    """Look for the retry button once (and for a grab). Raises RetryFound if it is there."""
+    """Look for the end of the mission once (and for a grab). Raises RetryFound if it is there.
+    Normal: the retry button. Fix retry: the COMPLETED / FAILED text."""
     global _last_scan
     _last_scan = time.time()
     screen = grab_screen()
     check_grabbed(screen)
+    if fix_retry_active():
+        seen = find_result(screen)
+        if seen:
+            time.sleep(RETRY_CONFIRM_DELAY)          # text fades in: make sure it stays
+            again = find_result(grab_screen())
+            if again and again[0] == seen[0]:
+                raise RetryFound(again[1], "fix", again[0])
+        return
     found = find_retry(screen)
     if found:
         match = found[0]
@@ -1457,6 +1518,15 @@ def click_at(x, y, tw, th):
     x += random.randint(-tw // 6, tw // 6)
     y += random.randint(-th // 6, th // 6)
     pydirectinput.moveTo(x, y)
+    time.sleep(random.uniform(0.08, 0.2))
+    pydirectinput.moveRel(1, 0)
+    time.sleep(0.05)
+    pydirectinput.click()
+
+
+def click_exact(x, y):
+    """Click one exact screen position (Fix retry: the position the user picked)."""
+    pydirectinput.moveTo(int(x), int(y))
     time.sleep(random.uniform(0.08, 0.2))
     pydirectinput.moveRel(1, 0)
     time.sleep(0.05)
@@ -1769,7 +1839,10 @@ def shift_sequence(watch=False, check_shifted=False):
                          "shifted ability 4")
 
         set_step(8)
-        log(f"Ability 5 over and over + holding {KEY_STRAFE_D.upper()} (until retry shows up "
+        move = settings["move_shifted"]
+        hold_key = KEY_STRAFE_D if move == "Right" else KEY_STRAFE if move == "Left" else None
+        hold_txt = f"holding {hold_key.upper()}" if hold_key else "standing still"
+        log(f"Ability 5 over and over + {hold_txt} (until the mission ends "
             f"or the mission passes {MISSION_TIMEOUT:g}s)")
         presses = 0
         next_5 = time.time()
@@ -1782,24 +1855,25 @@ def shift_sequence(watch=False, check_shifted=False):
                         t0 = state["mission_t0"]
                         timed_out = t0 is not None and now - t0 > MISSION_TIMEOUT
                         if timed_out:
-                            if d_held:                       # mission too long: let go of D
-                                pydirectinput.keyUp(KEY_STRAFE_D)
+                            if d_held:                       # mission too long: let go of the key
+                                pydirectinput.keyUp(hold_key)
                                 d_held = False
-                                log(f"Mission over {MISSION_TIMEOUT:g}s - released {KEY_STRAFE_D.upper()}")
-                        elif not d_held:
-                            pydirectinput.keyDown(KEY_STRAFE_D)   # hold D (retry found ends this)
+                                log(f"Mission over {MISSION_TIMEOUT:g}s - released {hold_key.upper()}")
+                        elif hold_key and not d_held:
+                            pydirectinput.keyDown(hold_key)   # hold A / D (the end of the mission ends this)
                             d_held = True
                         if now >= next_5:
                             presses += 1
-                            show("Ability 5", f"Pressed x{presses} + holding {KEY_STRAFE_D.upper()} "
-                                              "- until the retry button shows up")
+                            show("Ability 5", f"Pressed x{presses} + {hold_txt} "
+                                              "- until the mission ends")
                             tap(KEY_ABILITY_LAST)
                             next_5 = time.time() + ABILITY_5_CHECK_INTERVAL
                         wait(0.05)
                 except FritzShifted:
                     pass    # seen only now: the watching is off already, just carry on
         finally:
-            pydirectinput.keyUp(KEY_STRAFE_D)    # retry found / stop / error: never leave D held
+            if hold_key:
+                pydirectinput.keyUp(hold_key)    # retry found / stop / error: never leave it held
     finally:
         _fritz_watching = False
         _fritz_check_shifted = False
@@ -1982,6 +2056,16 @@ def macro_main():
         if settings["low_quality"]:
             log("Low quality mode: using only the pictures from the low quality fix folder "
                 "(body fragments are not checked)")
+        if settings["fix_retry"]:
+            if not settings["fix_retry_pos"]:
+                log("Fix retry is on but no click position is set (Settings > Configs) - "
+                    "using the normal retry detection")
+            elif not _result_templates:
+                log("Fix retry needs result_completed.png / result_failed.png - "
+                    "using the normal retry detection")
+            else:
+                log(f"Fix retry on: the retry click goes to {tuple(settings['fix_retry_pos'])} "
+                    f"{FIX_RETRY_WAIT:g}s after COMPLETED / FAILED shows up")
         log("Started. Click into Roblox; the routine starts when the mission begins.")
 
         with mss.mss() as sct:
@@ -2014,31 +2098,58 @@ def macro_main():
                     ev.put(("mission_ended",))
                     set_status("retrying")
                     set_step(-1)
-                    log(f"Retry found ({r.quality} quality, score {score:.2f})")
+                    fix = r.quality == "fix"
+                    if fix:
+                        log(f"Mission ended: {r.kind.upper()} text seen (Fix retry, score {score:.2f})")
+                    else:
+                        log(f"Retry found ({r.quality} quality, score {score:.2f})")
                     if was_rescued:
                         log("Stuck mission is over - player eliminated")
                         notify_rescue_async(True, stats["missions"],
                                             time.time() - mission_t0 if mission_t0 else None)
-                    low = r.quality == "low"
+                    if fix:      # no retry button was seen: use the graphics setting for the loot
+                        low = bool(settings["low_quality"])
+                        q = "low" if low else "normal"
+                    else:
+                        low = r.quality == "low"
+                        q = r.quality
                     loot_found, result = {}, None
-                    loot_on = bool(_loot_templates.get(r.quality))   # loot icons of THIS quality
+                    loot_on = bool(_loot_templates.get(q))   # loot icons of THIS quality
                     # normal quality: result + loot are read before the click.
                     # low quality: only the result now, the loot after the click (see below)
-                    if _result_templates or (loot_on and not low):
+                    if fix:
+                        # Fix retry: wait FIX_RETRY_WAIT seconds (result + loot are read meanwhile)
+                        show("Mission ended", f"{r.kind.capitalize()} - clicking retry in "
+                                              f"{FIX_RETRY_WAIT:g}s")
+                        log(f"Waiting {FIX_RETRY_WAIT:g}s before clicking the retry position")
+                        loot_found, result = scan_end_screen(
+                            q, want_loot=loot_on and not low, want_result=True,
+                            scan_time=FIX_RETRY_WAIT)
+                        if result is None:
+                            result = (r.kind, r.match)      # seen when it was detected
+                        record_result(result)
+                        if loot_on and not low:
+                            record_loot(loot_found)
+                    elif _result_templates or (loot_on and not low):
                         show("Retry found", "Checking the result and loot..."
                              if not low else "Checking the result...")
                         loot_found, result = scan_end_screen(
-                            r.quality, want_loot=not low, want_result=True)
+                            q, want_loot=not low, want_result=True)
                         if _result_templates:
                             record_result(result)
                         if loot_on and not low:
                             record_loot(loot_found)
                     if not low:
                         notify_mission_async(result, loot_found)   # Discord stats embed (if on)
-                    show("Retry found", "Clicking...")
-                    log("Clicking retry")
-                    save_click_debug(cx, cy, tw, th)
-                    click_at(abs_x, abs_y, int(tw * _scale), int(th * _scale))
+                    show("Retry found" if not fix else "Mission ended", "Clicking...")
+                    if fix:
+                        px, py = settings["fix_retry_pos"]
+                        log(f"Clicking retry at the saved position ({px}, {py})")
+                        click_exact(px, py)
+                    else:
+                        log("Clicking retry")
+                        save_click_debug(cx, cy, tw, th)
+                        click_at(abs_x, abs_y, int(tw * _scale), int(th * _scale))
                     clicked_at = time.time()
                     stats["retries"] += 1
                     push_stats()
@@ -2049,7 +2160,7 @@ def macro_main():
                             log(f"Low quality: checking the loot for {LOW_LOOT_SCAN_TIME:g}s "
                                 "after the retry click")
                             loot_found, _ = scan_end_screen(
-                                r.quality, want_loot=True, want_result=False,
+                                q, want_loot=True, want_result=False,
                                 scan_time=LOW_LOOT_SCAN_TIME)
                             record_loot(loot_found)
                         notify_mission_async(result, loot_found)
@@ -3216,6 +3327,8 @@ class SettingsWindow(tk.Toplevel):
         self.withdraw()     # build everything hidden, then show it once - no flicker
         self.app = app
         self.capturing = None       # bind id waiting for a key press
+        self.pos_capturing = False  # waiting for the click that sets the Fix retry position
+        self.pos_wait_release = False
         self.capture_hook = None
         self.save_job = None
         self.say_job = None
@@ -3572,6 +3685,122 @@ class SettingsWindow(tk.Toplevel):
                       "for the false detections yet).")
         self.check(g, "Low quality mode", self.v_lowq, self.on_lowq_toggle)
 
+        # section 4: movement while shifted (step 9)
+        self.v_move_shifted = tk.StringVar(value=settings["move_shifted"])
+        ms = self.card(page, "MOVE WHILE SHIFTED",
+                       "The direction you move in after shifting (while spamming ability 5). "
+                       f"Left holds {KEY_STRAFE.upper()}, Right holds {KEY_STRAFE_D.upper()}, "
+                       "Stand holds nothing.")
+        ms_items = [(o, o, MOVE_SHIFTED_BADGES[o], None) for o in MOVE_SHIFTED_OPTIONS]
+        self.move_shifted_dd = ModernDropdown(ms, ms_items, settings["move_shifted"],
+                                              self.on_move_shifted_pick)
+        self.move_shifted_dd.pack(fill="x")
+
+        # section 5: fix retry
+        self.v_fix = tk.BooleanVar(value=settings["fix_retry"])
+        f = self.card(page, "FIX RETRY",
+                      "Turn this on if the retry button is not being detected. The macro then "
+                      "watches for the COMPLETED / FAILED text instead, waits "
+                      f"{FIX_RETRY_WAIT:g} seconds and clicks the position you set below.")
+        self.check(f, "Fix retry", self.v_fix, self.on_fix_toggle)
+        pos_row = tk.Frame(f, bg=App.CARD)
+        pos_row.pack(fill="x", pady=(6, 0))
+        self.fix_pos_title = tk.Label(pos_row, text="Retry click position", font=(App.FONT, 10),
+                                      bg=App.CARD, anchor="w")
+        self.fix_pos_title.pack(side="left")
+        self.fix_pos_btn = tk.Label(pos_row, text="Set position", font=(App.FONT, 9, "bold"),
+                                    padx=12, pady=5)
+        self.fix_pos_btn.pack(side="right")
+        self.fix_pos_btn.bind("<Button-1>", lambda _e: self.start_pos_capture())
+        self.fix_pos_btn.bind("<Enter>", lambda _e: self.fix_pos_hover(True))
+        self.fix_pos_btn.bind("<Leave>", lambda _e: self.fix_pos_hover(False))
+        self.fix_pos_value = tk.Label(f, text="", font=(App.FONT, 9), bg=App.CARD, anchor="w")
+        self.fix_pos_value.pack(fill="x", pady=(4, 0))
+        self.refresh_fix_pos()
+
+    # ----- fix retry helpers -----
+    def fix_pos_hover(self, on):
+        if self.v_fix.get() and not self.pos_capturing:
+            self.fix_pos_btn.configure(bg=App.ACCENT_BG_HOVER if on else App.ACCENT_BG)
+
+    def refresh_fix_pos(self):
+        """Colours / texts of the position row: greyed out while Fix retry is off."""
+        on = bool(self.v_fix.get())
+        pos = settings["fix_retry_pos"]
+        text = f"X: {pos[0]}   Y: {pos[1]}" if pos else "Not set yet - press Set position, then click the retry button."
+        if self.pos_capturing:
+            text = "Now click the retry button (Esc to cancel)..."
+        self.fix_pos_title.configure(fg=App.TEXT if on else App.DIS_TEXT)
+        self.fix_pos_value.configure(text=text, fg=App.SUB if on else App.DIS_TEXT)
+        if on:
+            self.fix_pos_btn.configure(fg=App.ACCENT_TEXT, bg=App.ACCENT_BG, cursor="hand2",
+                                       text="Click now..." if self.pos_capturing else "Set position")
+        else:
+            self.fix_pos_btn.configure(fg=App.DIS_TEXT, bg=App.DIS_FILL, cursor="arrow",
+                                       text="Set position")
+
+    def on_fix_toggle(self):
+        if running():
+            self.v_fix.set(not self.v_fix.get())      # put the switch back
+            self.say("Stop the macro before changing Fix retry.", error=True)
+            return
+        settings["fix_retry"] = bool(self.v_fix.get())
+        if not settings["fix_retry"]:
+            self.cancel_pos_capture()
+        save_stats()
+        self.refresh_fix_pos()
+        if settings["fix_retry"] and not settings["fix_retry_pos"]:
+            self.say("Fix retry on - now set the retry click position.", good=True)
+        else:
+            self.say("Fix retry " + ("on" if settings["fix_retry"] else "off"), good=True)
+
+    def start_pos_capture(self):
+        """Like OP Auto Clicker: press the button, then click anywhere - that spot is saved."""
+        if not self.v_fix.get() or self.pos_capturing:
+            return
+        self.pos_capturing = True
+        self.pos_wait_release = True      # let go of the mouse button that pressed "Set position"
+        self.refresh_fix_pos()
+        self.say("Click the retry button now (Esc to cancel).")
+        self.poll_pos_capture()
+
+    def cancel_pos_capture(self):
+        if self.pos_capturing:
+            self.pos_capturing = False
+            try:
+                self.refresh_fix_pos()
+            except tk.TclError:
+                pass
+
+    def poll_pos_capture(self):
+        if not self.pos_capturing:
+            return
+        user32 = ctypes.windll.user32
+        if user32.GetAsyncKeyState(0x1B) & 0x8000:           # Esc
+            self.cancel_pos_capture()
+            self.say("Cancelled.")
+            return
+        down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)  # left mouse button
+        if self.pos_wait_release:
+            if not down:
+                self.pos_wait_release = False
+        elif down:
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            pt = POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            settings["fix_retry_pos"] = [int(pt.x), int(pt.y)]
+            self.pos_capturing = False
+            save_stats()
+            self.refresh_fix_pos()
+            self.say(f"Saved position ({pt.x}, {pt.y}).", good=True)
+            return
+        self.after(15, self.poll_pos_capture)
+
+    def on_move_shifted_pick(self, key):
+        self.v_move_shifted.set(key)
+        self.commit()
+
     def on_lowq_toggle(self):
         if running():
             self.v_lowq.set(not self.v_lowq.get())      # put the switch back
@@ -3637,6 +3866,8 @@ class SettingsWindow(tk.Toplevel):
         settings["family"] = fam if fam in FAMILIES else DEFAULT_FAMILY
         mov = self.v_movement.get()
         settings["movement"] = mov if mov in MOVEMENTS else DEFAULT_MOVEMENT
+        ms = self.v_move_shifted.get()
+        settings["move_shifted"] = ms if ms in MOVE_SHIFTED_OPTIONS else DEFAULT_MOVE_SHIFTED
         save_stats()
         # gentle warnings (it still saves what was typed)
         bad_url = bool(wh["url"]) and not webhook_url()
@@ -3659,6 +3890,7 @@ class SettingsWindow(tk.Toplevel):
 
     def close(self):
         self.cancel_capture()
+        self.pos_capturing = False
         self.commit()
         self.app.settings_win = None
         self.destroy()
