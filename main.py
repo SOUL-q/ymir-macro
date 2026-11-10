@@ -145,7 +145,7 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.2.4"        # release version tag
+VERSION = "v1.2.5"        # release version tag
                           # (shown in the footer, next to "Always on top")
 
 # --- Update checker (footer > Updates) ---
@@ -168,6 +168,13 @@ ALT_RETRY_WORD_COLS = (24, 100)   # the RETRY word only (x range inside the alt 
 SCAN_INTERVAL = 0.5       # seconds between screen checks for the retry button
 MONITOR_INDEX = 1         # 1 = primary monitor, 2 = second monitor, ...
 SCALES = [1.0]            # extra sizes to try on top of the automatic resolution scaling (leave as is)
+RETRY_SCALES = [0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30]
+                          # extra sizes tried ONLY for the retry button on screens that are not 1080p.
+                          # Roblox buttons / text do not always grow exactly with the screen height, so
+                          # the 1080p picture of the screen can show the button a bit bigger or smaller
+                          # than retry_text.png. Whichever size fits best wins.
+RETRY_DEBUG = False       # True = write the best retry score to the log every few seconds
+                          # (to see how close a screen is to being detected)
 BASE_HEIGHT = 1080        # all template images were taken at this screen height (1080p)
 FORCE_SCALE = None        # None = automatic (screen height / 1080). Set e.g. 1.33 to force a scale
 SCALE_THRESHOLD_RELAX = 0.05   # on a non-1080p screen every match threshold is lowered by this much
@@ -541,6 +548,10 @@ settings = {
     "fix_retry": False,     # True = end of mission is read from COMPLETED / FAILED, retry is clicked
                             # at fix_retry_pos
     "fix_retry_pos": None,  # [x, y] screen pixels picked by the user (None = not set yet)
+    "retry_scale": None,    # template size that last found the retry button on a non-1080p screen
+                            # (None = not found yet). Tried first; updated when another size matches
+    "always_on_top": False, # footer switch "Always on top" (kept between runs)
+    "window": None,         # {"x", "y", "w", "h"} of the main window (None = never moved/resized)
 }
 
 
@@ -590,12 +601,22 @@ def load_settings(saved):
         settings["low_quality"] = saved["low_quality"]
     if saved.get("move_shifted") in MOVE_SHIFTED_OPTIONS:
         settings["move_shifted"] = saved["move_shifted"]
+    if isinstance(saved.get("always_on_top"), bool):
+        settings["always_on_top"] = saved["always_on_top"]
+    rs = saved.get("retry_scale")
+    if isinstance(rs, (int, float)) and not isinstance(rs, bool) and 0.3 <= rs <= 3.0:
+        settings["retry_scale"] = float(rs)
     if isinstance(saved.get("fix_retry"), bool):
         settings["fix_retry"] = saved["fix_retry"]
     pos = saved.get("fix_retry_pos")
     if (isinstance(pos, (list, tuple)) and len(pos) == 2
             and all(isinstance(v, int) and not isinstance(v, bool) for v in pos)):
         settings["fix_retry_pos"] = [pos[0], pos[1]]
+    win = saved.get("window")
+    if (isinstance(win, dict) and all(
+            isinstance(win.get(k), int) and not isinstance(win.get(k), bool)
+            for k in ("x", "y", "w", "h"))):
+        settings["window"] = {k: win[k] for k in ("x", "y", "w", "h")}
 
 
 # ----------------------------- hotkeys ----------------------------------
@@ -1172,21 +1193,55 @@ def load_quality_templates(filename):
     return found
 
 
-def find_quality_template(screen_bgr, templates, threshold):
+def find_quality_template(screen_bgr, templates, threshold, scales=None):
     """Look for every look of a template. Returns (match, quality) of the best one that
     passes the threshold, or None. The quality says which look it was ("normal" / "low")."""
     best = None
     for quality, tpl in templates.items():
-        m = find_template(screen_bgr, tpl, threshold)
+        m = find_template(screen_bgr, tpl, threshold, scales)
         if m and (best is None or m[2] > best[0][2]):
             best = (m, quality)
     return best
 
 
-def best_match(screen_bgr, template):
+_small_cache = (None, None)
+_scale_hint = {}      # id(template) -> (best size, scans left before sweeping again)
+
+
+def _coarse_best_scale(screen_bgr, template, scales):
+    """Pick the template size that fits best using a half-resolution picture (4x cheaper than
+    matching every size at full resolution)."""
+    global _small_cache
+    hint = _scale_hint.get(id(template))
+    if hint and hint[1] > 0:                  # the best size is the same every scan: reuse it
+        _scale_hint[id(template)] = (hint[0], hint[1] - 1)
+        return hint[0]
+    if _small_cache[0] is not screen_bgr:
+        _small_cache = (screen_bgr, cv2.resize(screen_bgr, None, fx=0.5, fy=0.5,
+                                               interpolation=cv2.INTER_AREA))
+    small = _small_cache[1]
+    best_scale, best_score = 1.0, -1.0
+    for scale in scales:
+        t = cv2.resize(template, None, fx=scale * 0.5, fy=scale * 0.5,
+                       interpolation=cv2.INTER_AREA)
+        th, tw = t.shape[:2]
+        if th < 4 or tw < 4 or th > small.shape[0] or tw > small.shape[1]:
+            continue
+        score = cv2.minMaxLoc(cv2.matchTemplate(small, t, cv2.TM_CCOEFF_NORMED))[1]
+        if score > best_score:
+            best_scale, best_score = scale, score
+    if best_score >= 0.6:       # only trust it when the button really is on screen
+        _scale_hint[id(template)] = (best_scale, 20)     # sweep again after 20 scans
+    return best_scale
+
+
+def best_match(screen_bgr, template, scales=None):
     """Return (center_x, center_y, score, w, h) of the best match, or None."""
     best = None
-    for scale in SCALES:
+    scales = scales or SCALES
+    if len(scales) > 1:
+        scales = [_coarse_best_scale(screen_bgr, template, scales)]   # one full-size match only
+    for scale in scales:
         t = template if scale == 1.0 else cv2.resize(
             template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         th, tw = t.shape[:2]
@@ -1206,8 +1261,8 @@ def relax(threshold):
     return threshold
 
 
-def find_template(screen_bgr, template, threshold):
-    best = best_match(screen_bgr, template)
+def find_template(screen_bgr, template, threshold, scales=None):
+    best = best_match(screen_bgr, template, scales)
     if best and best[2] >= relax(threshold):
         return best
     return None
@@ -1299,18 +1354,70 @@ def load_alt_retry():
     log(f"{ALT_RETRY_FILE} loaded - used as an extra check for the retry button")
 
 
-def find_retry(screen):
-    """The retry button: retry_text.png first, then (extra check) alt_retry_button.png.
-    Returns (match, quality) like find_quality_template, or None."""
-    found = find_quality_template(screen, _retry_template, THRESHOLD)
+_last_debug_log = 0.0
+
+
+def _log_retry_score(screen, scales):
+    """RETRY_DEBUG: log the best retry score (even when it is below the threshold)."""
+    global _last_debug_log
+    if time.time() - _last_debug_log < 5:
+        return
+    _last_debug_log = time.time()
+    for quality, tpl in _retry_template.items():
+        best = best_match(screen, tpl, scales)
+        if best:
+            log(f"[debug] retry best score ({quality}): {best[2]:.3f} "
+                f"(needs {relax(THRESHOLD):.2f}), template size {best[3]}x{best[4]}")
+
+
+_retry_scans = 0
+
+
+def _match_retry(screen, scales):
+    """retry_text.png first, then alt_retry_button.png, at the given template sizes.
+    Returns (match, quality, size) or None. size = how much bigger/smaller than the picture."""
+    found = find_quality_template(screen, _retry_template, THRESHOLD, scales)
     if found:
-        return found
+        match, quality = found
+        return match, quality, match[3] / _retry_template[quality].shape[1]
     for templates, dx in _alt_retry_templates:
-        alt = find_quality_template(screen, templates, ALT_RETRY_THRESHOLD)
+        alt = find_quality_template(screen, templates, ALT_RETRY_THRESHOLD, scales)
         if alt:
             (cx, cy, score, w, h), quality = alt
-            return (cx + dx, cy, score, w, h), quality     # centre of the whole button
+            size = w / templates[quality].shape[1]
+            # centre of the whole button (dx is in picture pixels, so it grows with the size)
+            return (cx + dx * size, cy, score, w, h), quality, size
     return None
+
+
+def find_retry(screen):
+    """The retry button: retry_text.png first, then (extra check) alt_retry_button.png.
+    Returns (match, quality) like find_quality_template, or None.
+
+    Not 1080p: the size that matched last time (settings "retry_scale", saved in the json) is
+    tried first. Only when it misses are the other sizes (RETRY_SCALES) tried - and if one of
+    those matches, it becomes the saved size from then on."""
+    global _retry_scans
+    if abs(_scale - 1.0) <= 0.01:
+        found = _match_retry(screen, None)
+        return found[:2] if found else None
+    if RETRY_DEBUG:
+        _log_retry_score(screen, RETRY_SCALES)
+    saved = settings.get("retry_scale")
+    found = _match_retry(screen, [saved]) if saved else None
+    if not found:
+        # the other sizes cost more: with a saved size they are tried every 4th scan only
+        _retry_scans += 1
+        if not saved or _retry_scans % 4 == 0:
+            found = _match_retry(screen, RETRY_SCALES)
+            if found:
+                size = min(RETRY_SCALES, key=lambda sc: abs(sc - found[2]))
+                if saved is None or abs(size - saved) > 0.001:
+                    settings["retry_scale"] = size
+                    save_stats()
+                    log(f"Retry button matched at size x{size:.2f} (score {found[0][2]:.2f}) "
+                        "- saved, it is tried first from now on")
+    return found[:2] if found else None
 
 
 def fix_retry_active():
@@ -2608,6 +2715,7 @@ class App:
         self.settings_win = None
         self.pill_key = "idle"
         self.step_idx = -1
+        self.geo_job = None
 
         root.withdraw()     # stay hidden while building, so the window never flickers on open
         apply_theme(settings["theme"])
@@ -2634,10 +2742,13 @@ class App:
         root.update_idletasks()
         w = max(430, root.winfo_reqwidth())
         h = max(720, root.winfo_reqheight())
-        root.geometry(f"{w}x{h}+20+20")
-        root.minsize(400, max(560, h - 160))
+        min_h = max(560, h - 160)
+        w, h, x, y = self.restore_geometry(w, h, min_h)   # last size / spot (default: top-left)
+        root.geometry(f"{w}x{h}+{x}+{y}")
+        root.minsize(400, min_h)
         style_title_bar(root, self.BG)
         root.deiconify()
+        root.bind("<Configure>", self.on_configure)       # remember moves / resizes
         self.pump()
         if UPDATE_CHECK_ON_START:
             root.after(1500, start_update_check)
@@ -2865,15 +2976,20 @@ class App:
         self.log_text.tag_configure("good", foreground="#34d399")
         self.log_text.tag_configure("info", foreground=self.ACCENT_SOFT)
 
+    def on_topmost_toggle(self):
+        on = bool(self.topmost.get())
+        self.root.attributes("-topmost", on)
+        settings["always_on_top"] = on
+        save_stats()
+
     def build_footer(self):
         foot = tk.Frame(self.root, bg=self.BG)
         foot.pack(side="bottom", fill="x", padx=18, pady=(4, 12))
-        self.topmost = tk.BooleanVar(value=False)
+        self.topmost = tk.BooleanVar(value=bool(settings.get("always_on_top")))
+        self.root.attributes("-topmost", self.topmost.get())     # restore the saved state
         left = tk.Frame(foot, bg=self.BG)
         left.pack(side="left")
-        sw = ToggleSwitch(left, self.topmost,
-                          lambda: self.root.attributes("-topmost", self.topmost.get()),
-                          parent_bg=self.BG)
+        sw = ToggleSwitch(left, self.topmost, self.on_topmost_toggle, parent_bg=self.BG)
         sw.pack(side="left")
         lbl = tk.Label(left, text="Always on top", font=(App.FONT, 9), fg=self.SUB,
                        bg=self.BG, cursor="hand2")
@@ -3080,7 +3196,54 @@ class App:
         if not running():
             self.now_detail.configure(text=self.idle_hint())
 
+    # ----- remembering the window size / position -----
+    def restore_geometry(self, w, h, min_h):
+        """Saved size + position, kept inside the screen. Returns (w, h, x, y)."""
+        win = settings.get("window")
+        if not win:
+            return w, h, 20, 20
+        r = self.root
+        vx, vy = r.winfo_vrootx(), r.winfo_vrooty()
+        vw = max(r.winfo_vrootwidth(), r.winfo_screenwidth())
+        vh = max(r.winfo_vrootheight(), r.winfo_screenheight())
+        w = min(max(win["w"], 400), vw)
+        h = min(max(win["h"], min_h), vh)
+        # keep a good part of the window (and its title bar) on a screen, e.g. after a
+        # monitor was unplugged
+        x = min(max(win["x"], vx - w + 120), vx + vw - 120)
+        y = min(max(win["y"], vy), vy + vh - 80)
+        return w, h, x, y
+
+    def on_configure(self, event):
+        if event.widget is not self.root:      # ignore the child widgets
+            return
+        if self.geo_job:
+            self.root.after_cancel(self.geo_job)
+        self.geo_job = self.root.after(800, self.save_window)   # once it stops moving
+
+    def save_window(self):
+        self.geo_job = None
+        r = self.root
+        try:
+            if r.state() != "normal":          # minimized / maximized: keep the last good one
+                return
+            m = re.match(r"(\d+)x(\d+)([+-])(-?\d+)([+-])(-?\d+)$", r.geometry())
+        except tk.TclError:
+            return
+        if not m:
+            return
+        w, h = int(m.group(1)), int(m.group(2))
+        x = int(m.group(4)) * (1 if m.group(3) == "+" else -1)
+        y = int(m.group(6)) * (1 if m.group(5) == "+" else -1)
+        new = {"x": x, "y": y, "w": w, "h": h}
+        if new != settings.get("window"):
+            settings["window"] = new
+            save_stats()
+
     def on_close(self):
+        if self.geo_job:
+            self.root.after_cancel(self.geo_job)
+        self.save_window()
         if self.settings_win is not None:
             self.settings_win.close()
         request_stop()
