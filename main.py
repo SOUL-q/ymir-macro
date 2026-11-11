@@ -1,122 +1,4 @@
-"""
-ymir v1 by soul.py - AOTR mission macro with a status window (external keyboard/mouse input only).
-
-Routine per mission:
-  1. Ability 2 (only that), then wait 1.5s before anything else
-  2. Dash 14 times (one dash = Space pressed twice, with a gap between dashes)
-  3. Strafe (A, double-tap)
-  4. Ability 3
-  5. Buy time by strafing A (starts right after ability 3) for 15 seconds, the cooldown
-     ability 4 has after ability 3
-  6. Ability 4
-  7. Spam ability 5 for 5 seconds -> this shifts you into the titan (abilities change),
-     then wait. (It keeps spamming 4 more seconds in the background, inside that wait,
-     so the shift is used for sure: SHIFT_SPAM_EXTRA)
-  8. 17 seconds into that wait: spam the shifted ability 4 for 8 seconds, then wait 3 seconds
-  9. Press ability 5 over and over while HOLDING the "Move while shifted" direction (Right = D,
-     Left = A, Stand = nothing; Settings > Configs), until the RETRY button shows up (or the
-     mission passes MISSION_TIMEOUT, 2m30s - then the key is released and the stuck-mission rescue starts)
-
-Flow:
-  - The mission counts as started when the ability-2 icon (mission_start.png) shows up.
-    With the "Fritz" abilities another icon is used (mission_start_fritz.png, same two folders).
-  - When the word RETRY (retry_text.png) shows up, it clicks it, then does NOTHING
-    until the next mission starts, and repeats.
-
-Result + loot tracking:
-  When the RETRY button shows up, the end screen is also scanned for the words
-  COMPLETED / FAILED (result_completed.png, result_failed.png) and counted.
-  The loot icons are scanned at the same moment
-  (loot_scroll.png, loot_body.png, loot_defence.png, loot_offence.png,
-  loot_support.png - keep them in the "image" folder next to this script).
-  Normal quality retry button found: the loot is scanned BEFORE retry is clicked, with the normal
-  pictures.  Low quality retry button found (image/low quality fix/): only the COMPLETED / FAILED
-  result is read before the click; the loot is scanned ONLY during the 3s (LOW_LOOT_SCAN_TIME) after
-  retry was clicked, with the pictures
-  from "low quality fix" only (the normal pictures are never used then).
-  Every kind that is on screen counts as 1 for that mission, whatever the number
-  in its corner says.  1 scroll + 2 different fragments = "1 scroll, 2 fragments".
-
-Fix retry (Settings > Configs > Fix retry):
-  For when the retry button is not detected. Instead of looking for the button, the macro looks for
-  the words COMPLETED / FAILED (result_completed.png / result_failed.png). Once one is visible it
-  waits 2 seconds (FIX_RETRY_WAIT, the result + loot are read during that time) and then clicks the
-  position you picked in Settings (press "Set position", then click the retry button - the click is
-  captured). The position is saved in the json next to the other settings.
-
-Movement (Settings > Configs > Movements): only changes the initial dash sequence, before
-  ability 4 is used. "Shiki" = 14 dashes + strafe A, "Universal" = spam dash for 7.6s + strafe A,
-  "Wings of Freedom" = spam dash for 8s, then strafe A for 4s.
-
-Family / abilities (Settings > Configs > Abilities): "Blood Awakening" skips ability 3, the
-  buying time and ability 4: right after the movement it goes to the ability 5 shift, the wait,
-  shifted ability 4 and shifted ability 5.  "Universal" (WIP) then after ability 3 spams ability 4
-  for 5s, strafes A once, D for 2s, A for 4s, then goes on with the ability 5 shift. "Shiki" keeps
-  the routine described above (14 dashes, 15s of buying time, ability 4 once). "Fritz" (Beta) waits 4.8s
-  after ability 3, spams ability 4 and 5 for 6s, then goes on with the ability 5 shift. During the
-  shifting sequence the unshifted ability 3 / ability 4 icons (fritz_ability3.png /
-  fritz_ability4.png, same two folders) are watched: if either one is visible, the shift did not
-  work, so it goes back to ability 3 -> wait -> ability 4 + 5 spam -> the shifting sequence.
-  Seeing the shifted icon (fritz_shifted.png, same two folders) means the shift worked: it skips
-  straight to step 9 (ability 5 over and over), after spamming ability 4 for
-  FRITZ_SKIP_4_SPAM_TIME (4s). This check is ONLY done after Fritz went back
-  because the unshifted ability 3 / 4 icons were seen (never on the first pass).
-
-Stuck mission (longer than MISSION_TIMEOUT): look at the ground (ctrl), then click the middle of
-  the screen until the retry button shows up. With the "Fritz" abilities (he eliminates himself and
-  has to revive) it clicks for 10s, rests for 10s, clicks for 10s ... until retry shows up.
-
-Updates (footer > Updates):
-  Looks at the latest GitHub release of UPDATE_REPO (also once at start). If its tag is newer than
-  VERSION it asks to install it: the .exe attached to the release is downloaded, checked, and
-  swapped in for the running .exe, then the macro restarts. Running the plain .py only opens the
-  release page. Only works while the macro is stopped.
-
-Stuck-mission rescue:
-  If a mission runs longer than MISSION_TIMEOUT (2 minutes 30 seconds), something obscure went wrong after the
-  shift. The macro then presses ctrl, moves the mouse down for 2s and presses ctrl again (the
-  character looks at the ground), and clicks the middle of the screen every RESCUE_CLICK_DELAY
-  (0.5s) until the retry button shows up, and goes on as usual (result / loot scan, retry click, next mission).
-  If the Discord webhook is on, an embed tells you when the rescue starts, and another one when
-  the retry button shows up (player eliminated). Both mention you if mentions are on.
-
-Low quality mode (Settings > Configs > Graphics):
-  When on, ONLY the pictures from "image/low quality fix" are used to find the retry button, the
-  loot and the mission start (the normal pictures are not even loaded). Body fragments are not
-  searched for at all in this mode (their low quality picture gives false hits - no fix for now).
-  Stop the macro to change it.
-  When off, both looks are searched (auto-detect), as before.
-
-Grabbed detection:
-  When the red text YOUR STREAK IS IN DANGER (grabbed_text.png - keep it next to this
-  script) shows up, the macro presses the "escape grab" key (default 1, changeable in
-  Settings) - again every GRAB_REPEAT seconds while the text is still on screen.
-  Not with the "Shiki" abilities: ability 1 is one of Shiki's perks, so nothing is pressed.
-
-Install:
-    pip install mss opencv-python numpy pydirectinput keyboard
-    (tkinter comes with Python on Windows)
-    Keep all images in a folder called "image" next to this script. The low graphics looks
-    (retry button, ability 2 icon, loot - same file names) go in image/low quality fix/.
-    ymir_logo_app.png (header logo; text fallback if missing).
-    ymir.ico (window icon; default icon if missing).
-
-Run (as administrator, Roblox in windowed/borderless mode):
-    python main.py
-
-Hotkeys (work even while Roblox is focused):
-    F8 = start / manual start     F6 = pause / resume     F7 = stop
-    (these are the defaults - every key can be changed in Settings, bottom of the window)
-
-Settings (footer -> Settings):
-    Keybinds : hotkeys + in-game keys
-    Discord  : optional webhook, stats embed after every mission, stats graph every N hours
-              (+ test buttons), mention on errors (needs your user ID)
-    Configs  : Shiki / Fritz (Beta) / Universal (WIP) / Blood Awakening (default Shiki)
-    Everything is saved in aotr_stats.json inside the Documents folder, in "Ymir Macro".
-Slamming the mouse into a screen corner also aborts (pydirectinput failsafe).
-"""
-
+import atexit
 import base64
 import ctypes
 import json
@@ -145,7 +27,7 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.2.5"        # release version tag
+VERSION = "v1.3.0"        # release version tag
                           # (shown in the footer, next to "Always on top")
 
 # --- Update checker (footer > Updates) ---
@@ -213,7 +95,6 @@ GRAB_REPEAT = 1.0                # while the text stays, press the key again aft
 
 # --- Mission start detection (ability 2 icon) ---
 START_TEMPLATE_FILE = "mission_start.png"
-START_FRITZ_FILE = "mission_start_fritz.png"   # the ability-2 icon with the Fritz abilities
 START_THRESHOLD = 0.80    # lower it if the icon isn't being detected
 START_SETTLE_DELAY = 1.0  # extra wait after the icon appears, before ability 2
 ICON_GONE_TIMEOUT = 20    # after retry, max seconds to wait for the old HUD to vanish
@@ -223,12 +104,22 @@ ABILITY4_COOLDOWN = 15.0           # seconds of buying time after ability 3
 ABILITY4_COOLDOWN_MARGIN = 0.3     # tiny extra, so ability 4 is surely off cooldown
 
 # --- Stuck-mission rescue (a very rare obscure bug after the shift can leave the macro stuck) ---
-MISSION_TIMEOUT = 150.0     # a mission longer than this many seconds (2 min 30 s) counts as stuck
+MISSION_TIMEOUT = 120.0     # a mission longer than this many seconds (2 min) counts as stuck
 RESCUE_CLICK_DELAY = 0.5    # seconds between the clicks on the middle of the screen
-FRITZ_RESCUE_CLICK_TIME = 10.0   # Fritz: click the middle for this long ...
-FRITZ_RESCUE_REST_TIME = 10.0    # ... then rest this long (he is reviving), and repeat
 # Before clicking, the character is forced to look at the ground: press ctrl, move the mouse down
 # for LOOK_DOWN_TIME seconds, press ctrl again.
+# Before that look-down, the "still shifted" check: if the shifted ability 2 icon
+# (shifted_ability2.png, same two folders) is on screen, the player is still shifted, so ability 2
+# (the shifted one) is spammed for STILL_SHIFTED_SPAM_TIME. The wait before looking down
+# (STILL_SHIFTED_WAIT) starts STILL_SHIFTED_WAIT_START seconds after the spam started, so it runs
+# partly during the spam. Then the macro looks down and tries to kill the player.
+SHIFTED_ICON_FILE = "shifted_ability2.png"
+SHIFTED_ICON_THRESHOLD = 0.80        # lower it if the icon isn't being detected
+STILL_SHIFTED_SPAM_TIME = 5.0        # spam ability 2 (shifted) this long
+STILL_SHIFTED_SPAM_INTERVAL = 0.1    # seconds between those ability 2 presses
+STILL_SHIFTED_WAIT_START = 2.0       # the wait below starts this many seconds after the spam started
+STILL_SHIFTED_WAIT = 15.0            # wait this long before looking down
+DEBUG_RESCUE_KEY = "f3+k"            # DEBUG: F3+K triggers the stuck-mission rescue by hand (remove later)
 LOOK_DOWN_KEY = "ctrl"
 LOOK_DOWN_TIME = 2.0        # seconds the mouse is moved down
 LOOK_DOWN_STEP = 0.01       # seconds between two small downward mouse movements
@@ -245,8 +136,6 @@ LOW_FOLDER = "low quality fix"   # inside the image folder: the low graphics loo
 # --- Mission routine timings ---
 AFTER_ABILITY_DELAY = 0.6        # pause after ability 3 / 4
 AFTER_ABILITY2_DELAY = 1.5       # pause after ability 2, before the dash sequence starts
-DASH_COUNT = 14                  # number of dashes (each dash = Space pressed twice)
-DASH_GAP = (0.45, 0.55)          # seconds between one dash and the next (~0.5)
 DOUBLE_TAP_GAP = (0.06, 0.12)    # seconds between the two presses of ONE dash/strafe
 STRAFE_DELAY = (0.15, 0.25)      # seconds between A strafes while buying time (~0.2)
 SHIFT_SPAM_TIME = 5.0            # after ability 4: spam ability 5 for this long, so the shift is used for sure
@@ -281,38 +170,24 @@ START_KEY = "f8"
 PAUSE_KEY = "f6"
 QUIT_KEY = "f7"   # stops the macro (the window stays open)
 
-# --- Family "Fritz" routine: ability 3, wait, spam ability 4 + 5, then the shift ---
-FRITZ_AFTER_ABILITY3_WAIT = 4.8  # wait this long after ability 3 before the 4 + 5 spam (every time)
-FRITZ_SPAM_TIME = 6.0            # then spam ability 4 and 5 for this long
-FRITZ_SPAM_INTERVAL = 0.2        # seconds between two presses (4, 5, 4, 5 ...)
-# the unshifted ability 3 / 4 icons: still on screen when the shift should be done = not shifted
-FRITZ_ABILITY3_FILE = "fritz_ability3.png"
-FRITZ_ABILITY4_FILE = "fritz_ability4.png"
-FRITZ_SHIFTED_FILE = "fritz_shifted.png"   # seen = the shift worked
-FRITZ_ICON_THRESHOLD = 0.80      # lower it if the icons aren't being detected
-FRITZ_CHECK_AFTER = 5.0          # the icons are watched from this many seconds into the shifting sequence
-                                 # on (the first seconds they are still visible, the shift isn't done yet)
-FRITZ_SKIP_4_SPAM_TIME = 4.0     # Fritz skipped to step 9 (shifted icon seen on a retry): spam ability 4 this long first
-FRITZ_CHECK_INTERVAL = 0.5       # seconds between two looks for the icons
+# --- Family "Shiki": ability 4 icon during the buying time ---
+# While strafing A after ability 3, the ability 4 icon (shiki_ability4.png, same two folders) is
+# watched. The moment it shows up, ability 4 is spammed for SHIKI_ABILITY4_SPAM_TIME and the buying
+# time is over (the plain ABILITY4_COOLDOWN timer stays as a fallback if the icon is never seen).
+SHIKI_ABILITY4_FILE = "shiki_ability4.png"
+SHIKI_ABILITY4_THRESHOLD = 0.80      # lower it if the icon isn't being detected
+SHIKI_ABILITY4_CHECK_INTERVAL = 0.25 # seconds between two looks for the icon
+SHIKI_ABILITY4_CHECK_AFTER = 3.0     # start looking for the icon this many seconds after ability 3
+SHIKI_ABILITY4_SPAM_TIME = 2.0       # spam ability 4 this long once the icon is seen
+SHIKI_ABILITY4_SPAM_INTERVAL = 0.1   # seconds between those ability 4 presses
 
-# --- Family "Universal" routine (Shiki keeps the original routine above) ---
-# Universal movement dashing, copied from a recorded macro: Space spammed non-stop
+# --- Movement (every config): dashing copied from a recorded macro, Space spammed non-stop ---
 UNIVERSAL_DASH_TIME = 8.2         # seconds of spamming
 UNIVERSAL_DASH_HOLD = (0.065, 0.09)  # how long each Space press is held
 UNIVERSAL_DASH_PRESS_GAP = (0.05, 0.08)  # pause between two presses
-UNIVERSAL_ABILITY4_SPAM = 5.0      # after ability 3: spam ability 4 for this long
-UNIVERSAL_ABILITY4_INTERVAL = 0.2  # seconds between those ability 4 presses
-# then: strafe A once, strafe D for UNIVERSAL_STRAFE_D_TIME, strafe A for UNIVERSAL_STRAFE_A_TIME,
-# and only then the ability 5 shift
-UNIVERSAL_STRAFE_D_TIME = 2.0
-UNIVERSAL_STRAFE_A_TIME = 4.0
-
-# --- Movement (Settings > Configs > Movements): only changes the initial dash sequence,
-# before ability 4 has been used.  Shiki = DASH_COUNT dashes, Universal = spam dash for UNIVERSAL_DASH_TIME
-# dashes (both followed by one strafe A), Wings of Freedom = spam dash, then strafe A.
-WINGS_DASH_TIME = 8.0            # seconds of spamming dash
-WINGS_DASH_GAP = (0.15, 0.25)    # seconds between the dashes while spamming
-WINGS_STRAFE_TIME = 4.0          # seconds of strafing A afterwards
+UNIVERSAL_AFTER_ABILITY3_WAIT = 2.0  # Universal family: wait this long after ability 3 ...
+# ... then ctrl, mouse dragged down (LOOK_DOWN_TIME), ctrl again (forces the player to look down),
+# then ability 4 once, then the shifting sequence goes on as usual (no buying time, no icon check)
 
 # --- Settings window ---
 MOVE_SHIFTED_OPTIONS = ("Left", "Right", "Stand")   # "Move while shifted" (step 9)
@@ -322,22 +197,13 @@ MOVE_SHIFTED_BADGES = {
     "Right": ("R", "#14b8a6", "#ffffff"),
     "Stand": ("S", "#7a8398", "#ffffff"),
 }
-MOVEMENTS = ("Shiki", "Universal", "Wings of Freedom")
-DEFAULT_MOVEMENT = "Shiki"
-MOVEMENT_TAGS = {}               # entry -> tag text in the dropdown ("WIP" yellow, "Beta" blue)
-MOVEMENT_BADGES = {
-    "Shiki":            ("S", "#3b82f6", "#ffffff"),   # blue S
-    "Universal":        ("U", "#facc15", "#1a1500"),   # yellow U
-    "Wings of Freedom": ("W", "#14b8a6", "#ffffff"),   # teal W
-}
-FAMILIES = ("Shiki", "Fritz", "Universal", "Blood Awakening")
+FAMILIES = ("Shiki", "Universal", "Blood Awakening")
 DEFAULT_FAMILY = "Shiki"
 FAMILY_LABELS = {f: f for f in FAMILIES}   # what the dropdown shows
-FAMILY_TAGS = {"Fritz": "Beta", "Universal": "WIP"}   # entry -> tag text in the dropdown ("WIP" yellow, "Beta" blue)
+FAMILY_TAGS = {}   # entry -> tag text in the dropdown ("WIP" yellow, "Beta" blue), e.g. {"Universal": "Beta"}
 # icon next to each entry: (letter, badge colour, letter colour)
 FAMILY_BADGES = {
     "Shiki":           ("S", "#3b82f6", "#ffffff"),   # blue S
-    "Fritz":           ("F", "#ef4444", "#ffffff"),   # red F
     "Universal":       ("U", "#facc15", "#1a1500"),   # yellow U
     "Blood Awakening": ("B", "#ef4444", "#ffffff"),   # red B
 }
@@ -541,7 +407,6 @@ settings = {
     "keybinds": dict(DEFAULT_KEYBINDS),
     "webhook": dict(DEFAULT_WEBHOOK),
     "family": DEFAULT_FAMILY,
-    "movement": DEFAULT_MOVEMENT,
     "theme": DEFAULT_THEME,
     "low_quality": False,   # True = only the "low quality fix" pictures are used
     "move_shifted": DEFAULT_MOVE_SHIFTED,   # direction held at step 9: Left (A) / Right (D) / Stand
@@ -591,10 +456,6 @@ def load_settings(saved):
         settings["webhook"]["graph_hours"] = min(MAX_GRAPH_HOURS, max(1, hours))
     if saved.get("family") in FAMILIES:
         settings["family"] = saved["family"]
-    if saved.get("movement") in MOVEMENTS:
-        settings["movement"] = saved["movement"]
-    elif saved.get("family") == "Universal":
-        settings["movement"] = "Universal"   # older save: Universal used to include its dashes
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
     if isinstance(saved.get("low_quality"), bool):
@@ -662,7 +523,8 @@ def register_hotkeys():
     be) held down - add_hotkey stops working when the library thinks some key is stuck."""
     unregister_hotkeys()
     for key, fn in ((PAUSE_KEY, toggle_pause), (QUIT_KEY, request_stop),
-                    (START_KEY, request_start)):
+                    (START_KEY, request_start),
+                    (DEBUG_RESCUE_KEY, debug_trigger_rescue)):   # DEBUG: F3+K
         handler = _hotkey_handler(key, fn)
         try:
             if "+" in key and key != "+":
@@ -975,7 +837,8 @@ state = {"paused": False, "quit": False, "manual_start": False,
          "phase_status": "waiting",
          "mission_t0": None,        # when the current mission began (None = no mission running)
          "rescuing": False,         # True while the stuck-mission rescue is clicking
-         "rescued": False}          # True once the rescue started in the current mission
+         "rescued": False,          # True once the rescue started in the current mission
+         "debug_rescue": False}     # DEBUG: set by F3+K, makes tick() start the rescue right now
 stats = {"missions": 0, "retries": 0}
 loot = {kind: 0 for kind in LOOT_FILES}
 results = {"completed": 0, "failed": 0}
@@ -987,27 +850,13 @@ _scale = 1.0     # real screen height / BASE_HEIGHT (set when the macro starts)
 _retry_template = None
 _alt_retry_templates = []        # extra looks of the retry button: [(templates, dx)] - see load_alt_retry()
 _start_template = None
-_start_template_fritz = None
-_fritz_icons = []                # the unshifted Fritz ability 3 / 4 icons that were found
-_fritz_shifted_icon = None       # the icon that shows up once Fritz has shifted
-_fritz_watching = False          # True during Fritz' shifting sequence (until the shift is seen)
-_fritz_check_shifted = False     # True only on a RETRY (after the unshifted 3 / 4 icons were seen): then the
-                                 # shifted icon is looked for too, to skip to step 9
-_fritz_watch_from = 0.0          # ... and the unshifted icons count from this moment on
-_last_fritz_check = 0.0
+_shiki_ability4_icon = None      # Shiki: ability 4 icon, seen = ability 4 is ready
+_shifted_icon = None             # shifted ability 2 icon: seen at the rescue = player is still shifted
 _loot_templates = {}
 _result_templates = {}
 _grab_template = None
 _last_scan = 0.0
 _last_grab = 0.0
-
-
-class FritzShifted(Exception):
-    """Fritz' shifted icon was seen during the shifting sequence: the shift worked."""
-
-
-class FritzNotShifted(Exception):
-    """Fritz' unshifted ability 3 / 4 icon was seen during the shifting sequence."""
 
 
 class RetryFound(Exception):
@@ -1135,12 +984,25 @@ def request_stop():
         state["paused"] = False
 
 
+def debug_trigger_rescue():
+    """DEBUG (F3+K): start the stuck-mission rescue right now, as if 2m had passed.
+    Remove this function, DEBUG_RESCUE_KEY and the lines marked DEBUG when it is not needed."""
+    if not running():
+        log("DEBUG F3+K: start the macro first")
+        return
+    if state["rescuing"]:
+        return
+    state["debug_rescue"] = True
+    log("DEBUG F3+K: rescue requested")
+
+
 def start_macro(manual=False):
     global worker
     if running():
         return
     state.update(paused=False, quit=False, manual_start=manual,
-                 phase_status="waiting", mission_t0=None, rescuing=False)
+                 phase_status="waiting", mission_t0=None, rescuing=False,
+                 debug_rescue=False)
     worker = threading.Thread(target=macro_main, daemon=True)
     worker.start()
     start_reporter()
@@ -1293,41 +1155,15 @@ def check_grabbed(screen):
     if _grab_template is None or time.time() - _last_grab < GRAB_REPEAT:
         return
     if settings["family"] == "Shiki":
-        return   # ability 1 is one of Shiki's perks: no need to press it
+        return   # Shiki: ability 1 is a perk, no need to press it
     if find_template(red_mask(screen), _grab_template, GRAB_THRESHOLD):
         _last_grab = time.time()
         log(f"Grabbed! Pressing {KEY_GRAB.upper()}")
         tap(KEY_GRAB)
 
 
-def fritz_not_shifted(screen):
-    """True when the unshifted ability 3 or ability 4 icon of Fritz is on screen."""
-    return any(find_quality_template(screen, tpl, FRITZ_ICON_THRESHOLD) is not None
-               for tpl in _fritz_icons)
-
-
-def check_fritz_shift():
-    """During Fritz' shifting sequence (called from tick, so it runs during every wait):
-    the shifted icon seen = he shifted: raises FritzShifted. Otherwise raises FritzNotShifted as soon as
-    his unshifted ability 3 / 4 icon is on screen (from FRITZ_CHECK_AFTER seconds on)."""
-    global _last_fritz_check, _fritz_watching
-    if not _fritz_watching or time.time() - _last_fritz_check < FRITZ_CHECK_INTERVAL:
-        return
-    _last_fritz_check = time.time()
-    screen = grab_screen()
-    if _fritz_check_shifted and _fritz_shifted_icon and find_quality_template(
-            screen, _fritz_shifted_icon, FRITZ_ICON_THRESHOLD):
-        _fritz_watching = False
-        raise FritzShifted
-    if time.time() >= _fritz_watch_from and fritz_not_shifted(screen):
-        raise FritzNotShifted
-
-
 def icon_visible():
-    tpl = _start_template
-    if settings["family"] == "Fritz" and _start_template_fritz:
-        tpl = _start_template_fritz     # Fritz has another ability 2 icon
-    return find_quality_template(grab_screen(), tpl, START_THRESHOLD) is not None
+    return find_quality_template(grab_screen(), _start_template, START_THRESHOLD) is not None
 
 
 # --------------------- tick / wait (stay responsive) --------------------
@@ -1511,29 +1347,37 @@ def click_middle(cx, cy):
     pydirectinput.click()
 
 
-def rescue_clicks():
+def still_shifted():
+    """True when the shifted ability 2 icon is on screen (the player is still shifted)."""
+    if not _shifted_icon:
+        return False
+    return find_quality_template(grab_screen(), _shifted_icon, SHIFTED_ICON_THRESHOLD) is not None
+
+
+def rescue_clicks(debug=False):
     """Stuck mission (longer than MISSION_TIMEOUT): look at the ground (ctrl, mouse down for 2s,
     ctrl), then click the middle of the screen every RESCUE_CLICK_DELAY seconds until the retry
     button can be seen. The retry button being found raises RetryFound, so the normal
     end-of-mission handling takes over."""
     state["rescuing"] = True
-    state["rescued"] = True
-    try:
-        pydirectinput.keyUp(KEY_STRAFE_D)      # step 9 may be holding D: let go before rescuing
-    except Exception:  # noqa: BLE001
-        pass
-    notify_rescue_async(False, stats["missions"])      # Discord: stuck, trying to eliminate
+    if not debug:
+        state["rescued"] = True
+    for held in (KEY_STRAFE_D, KEY_STRAFE):
+        try:
+            pydirectinput.keyUp(held)          # step 9 may be holding D / A: let go before rescuing
+        except Exception:  # noqa: BLE001
+            pass
+    if not debug:
+        notify_rescue_async(False, stats["missions"])  # Discord: stuck, trying to eliminate
     cx = _monitor["left"] + _monitor["width"] // 2
     cy = _monitor["top"] + _monitor["height"] // 2
     log(f"Mission is taking longer than {MISSION_TIMEOUT:g}s - looking at the ground, then "
         "clicking the middle of the screen until retry shows up")
     show("Stuck mission", "Looking at the ground, then clicking the middle of the screen")
-    fritz = settings["family"] == "Fritz"
 
-    def click_phase(duration):
-        """Click the middle every RESCUE_CLICK_DELAY seconds (duration None = until retry)."""
-        stop_at = None if duration is None else time.time() + duration
-        while stop_at is None or time.time() < stop_at:
+    def click_phase():
+        """Click the middle every RESCUE_CLICK_DELAY seconds until retry shows up."""
+        while True:
             tick(scan_retry=False)                      # stop / pause
             loop_start = time.time()
             scan_for_retry()                            # raises RetryFound when it is visible
@@ -1543,26 +1387,31 @@ def rescue_clicks():
                 tick(scan_retry=False)
                 time.sleep(0.05)
 
-    def rest_phase(duration):
-        """No clicks, but keep looking for the retry button."""
-        stop_at = time.time() + duration
-        while time.time() < stop_at:
-            tick(scan_retry=False)
-            scan_for_retry()
-            show("Stuck mission", f"Fritz is reviving - resting {max(0, stop_at - time.time()):.0f}s")
-            time.sleep(0.3)
-
     try:
-        look_down(lambda: tick(scan_retry=False))
-        if fritz:
-            while True:     # click 10s, rest 10s, ... until the retry button shows up
-                show("Stuck mission", f"Fritz: clicking the middle for {FRITZ_RESCUE_CLICK_TIME:g}s")
-                log(f"Fritz rescue: clicking for {FRITZ_RESCUE_CLICK_TIME:g}s")
-                click_phase(FRITZ_RESCUE_CLICK_TIME)
-                log(f"Fritz rescue: resting for {FRITZ_RESCUE_REST_TIME:g}s")
-                rest_phase(FRITZ_RESCUE_REST_TIME)
+        # still shifted? (the shifted ability 2 icon is on screen): spam ability 2, then wait
+        if debug:
+            log("DEBUG F3+K: running the rescue now")
+        if _shifted_icon is None:
+            log(f"Rescue: {SHIFTED_ICON_FILE} not found - can't tell if the player is still shifted")
+        elif still_shifted():
+            log("Rescue: shifted ability 2 icon seen - still shifted")
+            show("Stuck mission", f"Still shifted - spamming ability 2 for {STILL_SHIFTED_SPAM_TIME:g}s")
+            log(f"Rescue: spamming ability 2 for {STILL_SHIFTED_SPAM_TIME:g}s, the {STILL_SHIFTED_WAIT:g}s "
+                f"wait starts {STILL_SHIFTED_WAIT_START:g}s after the spam started")
+            spam_start = time.time()
+            wait_end = spam_start + STILL_SHIFTED_WAIT_START + STILL_SHIFTED_WAIT
+            spam_key_for(KEY_ABILITY_1ST, STILL_SHIFTED_SPAM_TIME, STILL_SHIFTED_SPAM_INTERVAL,
+                         "ability 2 (shifted)")
+            while True:     # the rest of the wait (it started during the spam)
+                remaining = wait_end - time.time()
+                if remaining <= 0:
+                    break
+                show("Stuck mission", f"Waiting {remaining:.0f}s before looking down")
+                wait(min(0.5, remaining))
         else:
-            click_phase(None)
+            log("Rescue: shifted ability 2 icon not seen - not shifted")
+        look_down(lambda: tick(scan_retry=False))
+        click_phase()
     finally:
         state["rescuing"] = False
 
@@ -1577,12 +1426,14 @@ def tick(scan_retry=True):
         time.sleep(0.1)
     if scan_retry:
         t0 = state["mission_t0"]
-        if (not state["rescuing"] and t0 is not None
+        if state["debug_rescue"] and not state["rescuing"]:     # DEBUG: F3+K
+            state["debug_rescue"] = False
+            rescue_clicks(debug=True)
+        elif (not state["rescuing"] and t0 is not None
                 and time.time() - t0 > MISSION_TIMEOUT):
             rescue_clicks()
         if time.time() - _last_scan >= SCAN_INTERVAL:
             scan_for_retry()
-        check_fritz_shift()
 
 
 def wait(seconds, scan=True):
@@ -1790,17 +1641,25 @@ def wait_for_icon_gone():
 
 
 def buy_time_until_ability4_ready():
-    """Strafe A for the length of ability 4's cooldown. Call right after ability 3."""
+    """Strafe A for the length of ability 4's cooldown. Call right after ability 3.
+    Returns True when the Shiki ability 4 icon was seen (buying time over early), else False."""
     start = time.time()
     total = ABILITY4_COOLDOWN + ABILITY4_COOLDOWN_MARGIN
     keys = BUY_TIME_MOVES
     i = 0
     next_strafe = start
+    next_look = start + SHIKI_ABILITY4_CHECK_AFTER
     while True:
         now = time.time()
         remaining = total - (now - start)
         if remaining <= 0:
-            return
+            return False
+        if _shiki_ability4_icon and now >= next_look:
+            next_look = now + SHIKI_ABILITY4_CHECK_INTERVAL
+            if find_quality_template(grab_screen(), _shiki_ability4_icon,
+                                     SHIKI_ABILITY4_THRESHOLD) is not None:
+                log("Shiki ability 4 icon seen")
+                return True
         detail(f"Strafing {KEY_STRAFE.upper()}... ability 4 ready in {remaining:.0f}s")
         if now >= next_strafe:
             double_tap(keys[i % len(keys)])
@@ -1821,68 +1680,8 @@ def spam_key_for(key, seconds, interval, label):
         wait(min(interval, max(remaining, 0.01)))
 
 
-def spam_keys_for(keys, seconds, interval, label):
-    """Press several keys over and over (one after the other) for a while."""
-    end = time.time() + seconds
-    while True:
-        remaining = end - time.time()
-        if remaining <= 0:
-            return
-        detail(f"Spamming {label}... {remaining:.0f}s left")
-        for key in keys:
-            tap(key)
-            wait(min(interval, max(end - time.time(), 0.01)))
-            if time.time() >= end:
-                return
-
-
-def fritz_spam_4_5(pause):
-    """Fritz, right after ability 3: wait `pause`, then spam ability 4 and 5."""
-    set_step(5)
-    if pause > 0:
-        show("Ability 3", f"Waiting {pause:g}s before ability 4 + 5")
-        log(f"Waiting {pause:g}s after ability 3")
-        wait(pause)
-    show("Ability 4 + 5", f"Spamming ability 4 and 5 for {FRITZ_SPAM_TIME:g}s")
-    log(f"Ability 4 + 5 spam for {FRITZ_SPAM_TIME:g}s")
-    spam_keys_for((KEY_ABILITY_3RD, KEY_ABILITY_LAST), FRITZ_SPAM_TIME,
-                  FRITZ_SPAM_INTERVAL, "ability 4 + 5")
-
-
-def strafe_for(key, seconds):
-    """Double-tap a strafe key over and over for a while."""
-    end = time.time() + seconds
-    next_strafe = time.time()
-    while True:
-        now = time.time()
-        remaining = end - now
-        if remaining <= 0:
-            return
-        detail(f"Strafing {key.upper()}... {remaining:.0f}s left")
-        if now >= next_strafe:
-            double_tap(key)
-            next_strafe = time.time() + random.uniform(*STRAFE_DELAY)
-        wait(0.05)
-
-
-def dash_spam_for(key, seconds):
-    """Dash (double-tap) over and over for a while - Wings of Freedom movement."""
-    end = time.time() + seconds
-    next_dash = time.time()
-    while True:
-        now = time.time()
-        remaining = end - now
-        if remaining <= 0:
-            return
-        detail(f"Dashing... {remaining:.0f}s left")
-        if now >= next_dash:
-            double_tap(key)
-            next_dash = time.time() + random.uniform(*WINGS_DASH_GAP)
-        wait(0.05)
-
-
 def spam_recorded_dash(key, seconds):
-    """Universal movement: Space pressed over and over with the timings of a recorded macro
+    """The movement (every config): Space pressed over and over with the timings of a recorded macro
     (each press held ~65-90 ms, ~50-80 ms between presses)."""
     end = time.time() + seconds
     while True:
@@ -1898,111 +1697,69 @@ def spam_recorded_dash(key, seconds):
         wait(random.uniform(*UNIVERSAL_DASH_PRESS_GAP), scan=False)
 
 
-def shift_sequence(watch=False, check_shifted=False):
+def shift_sequence():
     """The shift: ability 5 spam, the wait, shifted ability 4, then ability 5 until the retry
-    button shows up. watch=True (Fritz): FritzNotShifted is raised as soon as his unshifted
-    ability 3 / 4 icon is seen (from FRITZ_CHECK_AFTER seconds on); when his shifted icon is seen
-    the shift worked, so it skips straight to step 9 (ability 5 over and over) - but ONLY when
-    check_shifted=True, which is the case only after Fritz went back because the unshifted icons
-    were seen (a retry of the sequence). On the first pass the shifted icon is not looked at."""
-    global _fritz_watching, _fritz_watch_from, _fritz_check_shifted
-    _fritz_watch_from = time.time() + FRITZ_CHECK_AFTER
-    _fritz_check_shifted = bool(watch and check_shifted)
-    _fritz_watching = bool(watch and (_fritz_icons or _fritz_shifted_icon))
-    try:
-        try:
-            set_step(6)
-            show("Shift", "Spamming ability 5 so the shift is used")
-            log(f"Ability 5 spam for {SHIFT_SPAM_TIME:g}s (shift)")
-            spam_end = time.time() + SHIFT_SPAM_TIME
-            while time.time() < spam_end:
-                tap(KEY_ABILITY_LAST)
-                wait(SHIFT_SPAM_INTERVAL)
-            log(f"Waiting {SHIFTED4_SPAM_AT:g}s for the shift (then shifted ability 4)")
-            shift_end = time.time() + SHIFTED4_SPAM_AT
-            extra_end = time.time() + SHIFT_SPAM_EXTRA   # still pressing 5 quietly during the first seconds of the wait
-            while True:
-                remaining = shift_end - time.time()
-                if remaining <= 0:
-                    break
-                show("Shift", f"Waiting for the shift... {remaining:.0f}s")
-                if time.time() < extra_end:
-                    tap(KEY_ABILITY_LAST)
-                    wait(min(SHIFT_SPAM_INTERVAL, remaining))
-                else:
-                    wait(min(0.5, remaining))
-
-            set_step(7)
-            log(f"Shifted ability 4 spam for {SHIFTED4_SPAM_TIME:g}s")
-            spam_key_for(KEY_ABILITY_3RD, SHIFTED4_SPAM_TIME, SHIFTED4_SPAM_INTERVAL,
-                         "shifted ability 4")
-            show("Shifted ability 4", f"Waiting {SHIFTED_4_TO_5_DELAY:g}s before ability 5")
-            wait(SHIFTED_4_TO_5_DELAY)
-        except FritzShifted:
-            log("Fritz: shifted icon seen - the shift worked, skipping to ability 5")
-            set_step(7)
-            log(f"Skipped to step 9: shifted ability 4 spam for {FRITZ_SKIP_4_SPAM_TIME:g}s first")
-            spam_key_for(KEY_ABILITY_3RD, FRITZ_SKIP_4_SPAM_TIME, SHIFTED4_SPAM_INTERVAL,
-                         "shifted ability 4")
-
-        set_step(8)
-        move = settings["move_shifted"]
-        hold_key = KEY_STRAFE_D if move == "Right" else KEY_STRAFE if move == "Left" else None
-        hold_txt = f"holding {hold_key.upper()}" if hold_key else "standing still"
-        log(f"Ability 5 over and over + {hold_txt} (until the mission ends "
-            f"or the mission passes {MISSION_TIMEOUT:g}s)")
-        presses = 0
-        next_5 = time.time()
-        d_held = False
-        try:
-            while True:
-                try:
-                    while True:
-                        now = time.time()
-                        t0 = state["mission_t0"]
-                        timed_out = t0 is not None and now - t0 > MISSION_TIMEOUT
-                        if timed_out:
-                            if d_held:                       # mission too long: let go of the key
-                                pydirectinput.keyUp(hold_key)
-                                d_held = False
-                                log(f"Mission over {MISSION_TIMEOUT:g}s - released {hold_key.upper()}")
-                        elif hold_key and not d_held:
-                            pydirectinput.keyDown(hold_key)   # hold A / D (the end of the mission ends this)
-                            d_held = True
-                        if now >= next_5:
-                            presses += 1
-                            show("Ability 5", f"Pressed x{presses} + {hold_txt} "
-                                              "- until the mission ends")
-                            tap(KEY_ABILITY_LAST)
-                            next_5 = time.time() + ABILITY_5_CHECK_INTERVAL
-                        wait(0.05)
-                except FritzShifted:
-                    pass    # seen only now: the watching is off already, just carry on
-        finally:
-            if hold_key:
-                pydirectinput.keyUp(hold_key)    # retry found / stop / error: never leave it held
-    finally:
-        _fritz_watching = False
-        _fritz_check_shifted = False
-
-
-def fritz_routine():
-    """Fritz from right after the first ability 3: wait, spam ability 4 + 5, then the shifting
-    sequence. If his unshifted ability 3 / 4 icon shows up during the shifting sequence, go back:
-    ability 3 -> wait -> ability 4 + 5 spam -> the shifting sequence, until it works."""
-    redo = False
+    button shows up."""
+    set_step(6)
+    show("Shift", "Spamming ability 5 so the shift is used")
+    log(f"Ability 5 spam for {SHIFT_SPAM_TIME:g}s (shift)")
+    spam_end = time.time() + SHIFT_SPAM_TIME
+    while time.time() < spam_end:
+        tap(KEY_ABILITY_LAST)
+        wait(SHIFT_SPAM_INTERVAL)
+    log(f"Waiting {SHIFTED4_SPAM_AT:g}s for the shift (then shifted ability 4)")
+    shift_end = time.time() + SHIFTED4_SPAM_AT
+    extra_end = time.time() + SHIFT_SPAM_EXTRA   # still pressing 5 quietly during the first seconds of the wait
     while True:
-        try:
-            if redo:
-                set_step(3)
-                show("Ability 3", "Not shifted - back to ability 3")
-                log("Ability 3 (again)")
-                tap(KEY_ABILITY_2ND)
-            fritz_spam_4_5(FRITZ_AFTER_ABILITY3_WAIT)
-            shift_sequence(watch=True, check_shifted=redo)
-        except FritzNotShifted:
-            log("Fritz: ability 3 / 4 icon visible during the shift - not shifted, starting over")
-            redo = True
+        remaining = shift_end - time.time()
+        if remaining <= 0:
+            break
+        show("Shift", f"Waiting for the shift... {remaining:.0f}s")
+        if time.time() < extra_end:
+            tap(KEY_ABILITY_LAST)
+            wait(min(SHIFT_SPAM_INTERVAL, remaining))
+        else:
+            wait(min(0.5, remaining))
+
+    set_step(7)
+    log(f"Shifted ability 4 spam for {SHIFTED4_SPAM_TIME:g}s")
+    spam_key_for(KEY_ABILITY_3RD, SHIFTED4_SPAM_TIME, SHIFTED4_SPAM_INTERVAL,
+                 "shifted ability 4")
+    show("Shifted ability 4", f"Waiting {SHIFTED_4_TO_5_DELAY:g}s before ability 5")
+    wait(SHIFTED_4_TO_5_DELAY)
+
+    set_step(8)
+    move = settings["move_shifted"]
+    hold_key = KEY_STRAFE_D if move == "Right" else KEY_STRAFE if move == "Left" else None
+    hold_txt = f"holding {hold_key.upper()}" if hold_key else "standing still"
+    log(f"Ability 5 over and over + {hold_txt} (until the mission ends "
+        f"or the mission passes {MISSION_TIMEOUT:g}s)")
+    presses = 0
+    next_5 = time.time()
+    d_held = False
+    try:
+        while True:
+            now = time.time()
+            t0 = state["mission_t0"]
+            timed_out = t0 is not None and now - t0 > MISSION_TIMEOUT
+            if timed_out:
+                if d_held:                       # mission too long: let go of the key
+                    pydirectinput.keyUp(hold_key)
+                    d_held = False
+                    log(f"Mission over {MISSION_TIMEOUT:g}s - released {hold_key.upper()}")
+            elif hold_key and not d_held:
+                pydirectinput.keyDown(hold_key)   # hold A / D (the end of the mission ends this)
+                d_held = True
+            if now >= next_5:
+                presses += 1
+                show("Ability 5", f"Pressed x{presses} + {hold_txt} "
+                                  "- until the mission ends")
+                tap(KEY_ABILITY_LAST)
+                next_5 = time.time() + ABILITY_5_CHECK_INTERVAL
+            wait(0.05)
+    finally:
+        if hold_key:
+            pydirectinput.keyUp(hold_key)    # retry found / stop / error: never leave it held
 
 
 # ---------------------------- the routine -------------------------------
@@ -2021,42 +1778,19 @@ def run_mission():
     tap(KEY_ABILITY_1ST)
     wait(AFTER_ABILITY2_DELAY)  # nothing else happens until the dash sequence
 
-    # read once per mission: the movement only changes the initial dash sequence,
+    # read once per mission: the movement is the same for every config,
     # the family (abilities) decides what happens from ability 3 on
-    movement = settings["movement"]
-    universal = settings["family"] == "Universal"
+    universal = settings["family"] == "Universal"   # ability 3, wait, look down, ability 4, shift
     blood = settings["family"] == "Blood Awakening"
-    fritz = settings["family"] == "Fritz"
 
     set_step(1)
-    if movement == "Wings of Freedom":
-        log(f"Movement: Wings of Freedom - dashing for {WINGS_DASH_TIME:g}s")
-        show("Dashing", f"Spamming dash for {WINGS_DASH_TIME:g}s")
-        dash_spam_for(KEY_DASH, WINGS_DASH_TIME)
+    log(f"Movement: spamming dash for {UNIVERSAL_DASH_TIME:g}s")
+    spam_recorded_dash(KEY_DASH, UNIVERSAL_DASH_TIME)
 
-        set_step(2)
-        show("Strafe", f"Strafing {KEY_STRAFE.upper()} for {WINGS_STRAFE_TIME:g}s")
-        log(f"Strafe {KEY_STRAFE.upper()} for {WINGS_STRAFE_TIME:g}s")
-        strafe_for(KEY_STRAFE, WINGS_STRAFE_TIME)
-    elif movement == "Universal":
-        log(f"Movement: Universal - spamming dash for {UNIVERSAL_DASH_TIME:g}s")
-        spam_recorded_dash(KEY_DASH, UNIVERSAL_DASH_TIME)
-
-        set_step(2)
-        show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
-        log("Strafe")
-        double_tap(KEY_STRAFE)
-    else:
-        log(f"Dashing x{DASH_COUNT}")
-        for n in range(DASH_COUNT):
-            show("Dashing", f"Dash {n + 1} / {DASH_COUNT}")
-            double_tap(KEY_DASH)
-            wait(random.uniform(*DASH_GAP))  # gap between dashes
-
-        set_step(2)
-        show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
-        log("Strafe")
-        double_tap(KEY_STRAFE)
+    set_step(2)
+    show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
+    log("Strafe")
+    double_tap(KEY_STRAFE)
     wait(0.3)
 
     if blood:
@@ -2068,68 +1802,59 @@ def run_mission():
         log("Ability 3")
         tap(KEY_ABILITY_2ND)  # no pause: buying time starts right away
 
-    if blood:
-        pass
-    elif fritz:
-        pass    # fritz_routine() below: wait, ability 4 + 5 spam, the shift (and again if it failed)
-    elif universal:
-        set_step(4)
-        show("Ability 4", f"Spamming ability 4 for {UNIVERSAL_ABILITY4_SPAM:g}s")
-        log(f"Ability 4 spam for {UNIVERSAL_ABILITY4_SPAM:g}s")
-        spam_key_for(KEY_ABILITY_3RD, UNIVERSAL_ABILITY4_SPAM,
-                     UNIVERSAL_ABILITY4_INTERVAL, "ability 4")
-        set_step(5)
-        show("Buying time", f"Strafe {KEY_STRAFE.upper()} once, {KEY_STRAFE_D.upper()}, "
-                            f"then {KEY_STRAFE.upper()}")
-        log(f"Strafe {KEY_STRAFE.upper()} once")
-        double_tap(KEY_STRAFE)
-        wait(random.uniform(*STRAFE_DELAY))
-        log(f"Strafe {KEY_STRAFE_D.upper()} for {UNIVERSAL_STRAFE_D_TIME:g}s")
-        strafe_for(KEY_STRAFE_D, UNIVERSAL_STRAFE_D_TIME)
-        log(f"Strafe {KEY_STRAFE.upper()} for {UNIVERSAL_STRAFE_A_TIME:g}s")
-        strafe_for(KEY_STRAFE, UNIVERSAL_STRAFE_A_TIME)
-    else:
-        set_step(4)
-        show("Buying time", f"Strafing {KEY_STRAFE.upper()} until ability 4 is off cooldown")
-        log(f"Buying time for {ABILITY4_COOLDOWN:.0f}s (ability 4 cooldown)")
-        buy_time_until_ability4_ready()
+        if universal:
+            # Universal: ability 3 -> wait -> look down (ctrl, drag mouse down, ctrl) -> ability 4
+            set_step(4)
+            show("Waiting", f"{UNIVERSAL_AFTER_ABILITY3_WAIT:g}s after ability 3")
+            log(f"Universal: waiting {UNIVERSAL_AFTER_ABILITY3_WAIT:g}s after ability 3")
+            wait(UNIVERSAL_AFTER_ABILITY3_WAIT)
+            show("Looking down", "ctrl, mouse down, ctrl")
+            log("Universal: looking down (ctrl, mouse down, ctrl)")
+            look_down(lambda: tick(scan_retry=False))
+            set_step(5)
+            show("Ability 4")
+            log("Ability 4")
+            tap(KEY_ABILITY_3RD)
+            wait(AFTER_ABILITY_DELAY)
+        else:
+            set_step(4)
+            show("Buying time", f"Strafing {KEY_STRAFE.upper()} until ability 4 is off cooldown")
+            log(f"Buying time for {ABILITY4_COOLDOWN:.0f}s (ability 4 cooldown)")
+            icon_seen = buy_time_until_ability4_ready()
 
-        set_step(5)
-        show("Ability 4")
-        log("Ability 4")
-        tap(KEY_ABILITY_3RD)
-        wait(AFTER_ABILITY_DELAY)
+            set_step(5)
+            if icon_seen:
+                show("Ability 4", f"Icon seen - spamming ability 4 for {SHIKI_ABILITY4_SPAM_TIME:g}s")
+                log(f"Ability 4 spam for {SHIKI_ABILITY4_SPAM_TIME:g}s (icon seen)")
+                spam_key_for(KEY_ABILITY_3RD, SHIKI_ABILITY4_SPAM_TIME,
+                             SHIKI_ABILITY4_SPAM_INTERVAL, "ability 4")
+            else:
+                show("Ability 4")
+                log("Ability 4")
+                tap(KEY_ABILITY_3RD)
+            wait(AFTER_ABILITY_DELAY)
 
-    if fritz:
-        fritz_routine()     # never returns normally (the retry button ends the mission)
-    else:
-        shift_sequence()
+    shift_sequence()
 
 
 # --------------------------- macro thread -------------------------------
 def macro_main():
     global _sct, _monitor, _scale, _retry_template, _start_template, _grab_template
-    global _start_template_fritz, _fritz_shifted_icon
+    global _shiki_ability4_icon, _shifted_icon
     try:
         _retry_template = load_quality_templates(TEMPLATE_FILE)
         load_alt_retry()
         _start_template = load_quality_templates(START_TEMPLATE_FILE)
         try:
-            _start_template_fritz = load_quality_templates(START_FRITZ_FILE)
+            _shiki_ability4_icon = load_quality_templates(SHIKI_ABILITY4_FILE)
         except FileNotFoundError:
-            _start_template_fritz = None
-            log(f"Fritz: {START_FRITZ_FILE} not found - the normal ability 2 icon is used for Fritz")
-        _fritz_icons.clear()
-        for fname in (FRITZ_ABILITY3_FILE, FRITZ_ABILITY4_FILE):
-            try:
-                _fritz_icons.append(load_quality_templates(fname))
-            except FileNotFoundError:
-                log(f"Fritz: {fname} not found - can't tell if he failed to shift")
+            _shiki_ability4_icon = None
+            log(f"Shiki: {SHIKI_ABILITY4_FILE} not found - buying time uses the {ABILITY4_COOLDOWN:.0f}s timer")
         try:
-            _fritz_shifted_icon = load_quality_templates(FRITZ_SHIFTED_FILE)
+            _shifted_icon = load_quality_templates(SHIFTED_ICON_FILE)
         except FileNotFoundError:
-            _fritz_shifted_icon = None
-            log(f"Fritz: {FRITZ_SHIFTED_FILE} not found - can't tell if he shifted")
+            _shifted_icon = None
+            log(f"Rescue: {SHIFTED_ICON_FILE} not found - the still-shifted check is skipped")
         _grab_template = None
         if GRAB_ENABLED:
             try:
@@ -2749,6 +2474,8 @@ class App:
         style_title_bar(root, self.BG)
         root.deiconify()
         root.bind("<Configure>", self.on_configure)       # remember moves / resizes
+        root.bind("<FocusIn>", self.keep_settings_on_top, add="+")   # settings stays above this window
+        root.bind("<ButtonPress>", self.keep_settings_on_top, add="+")
         self.pump()
         if UPDATE_CHECK_ON_START:
             root.after(1500, start_update_check)
@@ -2781,6 +2508,7 @@ class App:
         """Rebuild every widget in the new theme and put back what was on screen."""
         r = self.root
         self.disarm_reset()
+        geo = r.geometry()      # size + position now: the theme change must not move / resize the window
         keep = {
             "title": self.now_title.cget("text"),
             "detail": self.now_detail.cget("text"),
@@ -2817,9 +2545,9 @@ class App:
         t.see("end")
         t.configure(state="disabled")
         r.update_idletasks()
-        r.geometry(f"{max(r.winfo_width(), r.winfo_reqwidth())}x"
-                   f"{max(r.winfo_height(), r.winfo_reqheight())}")
+        r.geometry(geo)         # same size and place as before (the log takes up any difference)
         style_title_bar(r, self.BG)
+        self.keep_settings_on_top()      # (debounced: one single lift, no flicker)
 
     # ----- layout helpers -----
     def card(self, title=None, expand=False, pad=(18, 14)):
@@ -2976,9 +2704,27 @@ class App:
         self.log_text.tag_configure("good", foreground="#34d399")
         self.log_text.tag_configure("info", foreground=self.ACCENT_SOFT)
 
+    def keep_settings_on_top(self, _event=None):
+        """The settings window stays above the main window, even when that one is always on top."""
+        if self.settings_win is None or getattr(self, "_lift_job", None):
+            return                       # nothing to do, or a lift is already scheduled
+        self._lift_job = self.root.after(60, self._lift_settings)
+
+    def _lift_settings(self):
+        """One single lift, 60 ms after the last request (many events -> no flicker)."""
+        self._lift_job = None
+        win = self.settings_win
+        if win is None:
+            return
+        try:
+            win.lift()                   # it is owned by the main window and topmost already
+        except tk.TclError:
+            pass
+
     def on_topmost_toggle(self):
         on = bool(self.topmost.get())
         self.root.attributes("-topmost", on)
+        self.keep_settings_on_top()
         settings["always_on_top"] = on
         save_stats()
 
@@ -3505,6 +3251,7 @@ class SettingsWindow(tk.Toplevel):
         except (tk.TclError, OSError):
             pass
         self.resizable(False, False)
+        self.transient(app.root)             # owned by the main window = always drawn above it
         self.attributes("-topmost", True)    # settings always stays above everything
         self.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -3547,10 +3294,13 @@ class SettingsWindow(tk.Toplevel):
     def retheme(self, tab):
         """The theme changed: rebuild this window in the new look (same place, same size)."""
         self.commit()
+        old_w, old_h = self.winfo_width(), self.winfo_height()
         self.build_ui(tab)
         self.update_idletasks()
-        self.geometry(f"{max(440, self.winfo_reqwidth())}x{self.winfo_reqheight()}")
+        # keep the size it had; it only grows if the new look really needs more room
+        self.geometry(f"{max(old_w, self.winfo_reqwidth())}x{max(old_h, self.winfo_reqheight())}")
         style_title_bar(self, App.BG)
+        self.app.keep_settings_on_top()
 
     # ----- look -----
     def setup_styles(self):
@@ -3821,25 +3571,16 @@ class SettingsWindow(tk.Toplevel):
 
     # ----- configs tab -----
     def build_family(self, page):
-        # section 1: movements (only the initial dash sequence, before ability 4 is used)
-        self.v_movement = tk.StringVar(value=settings["movement"])
-        m = self.card(page, "MOVEMENTS",
-                      "Only changes the initial dash sequence, before ability 4 is used.")
-        m_items = [(f, f, MOVEMENT_BADGES[f], MOVEMENT_TAGS.get(f)) for f in MOVEMENTS]
-        self.movement_dd = ModernDropdown(m, m_items, settings["movement"],
-                                          self.on_movement_pick)
-        self.movement_dd.pack(fill="x")
-
-        # section 2: abilities (the family)
+        # section 1: abilities (the family)
         self.v_family = tk.StringVar(value=settings["family"])
         c = self.card(page, "ABILITIES")
         items = [(f, FAMILY_LABELS[f], FAMILY_BADGES[f], FAMILY_TAGS.get(f)) for f in FAMILIES]
         self.family_dd = ModernDropdown(c, items, settings["family"], self.on_family_pick)
         self.family_dd.pack(fill="x")
-        tk.Label(c, text="Fritz and yeager not recommended", font=(App.FONT, 8),
+        tk.Label(c, text="Yeager not recommended", font=(App.FONT, 8),
                  fg=App.SUB, bg=App.CARD, anchor="w").pack(fill="x", pady=(8, 0))
 
-        # section 3: graphics
+        # section 2: graphics
         self.v_lowq = tk.BooleanVar(value=settings["low_quality"])
         g = self.card(page, "GRAPHICS",
                       "Turn this on if you play on low graphics. It uses ONLY the pictures in "
@@ -3848,7 +3589,7 @@ class SettingsWindow(tk.Toplevel):
                       "for the false detections yet).")
         self.check(g, "Low quality mode", self.v_lowq, self.on_lowq_toggle)
 
-        # section 4: movement while shifted (step 9)
+        # section 3: movement while shifted (step 9)
         self.v_move_shifted = tk.StringVar(value=settings["move_shifted"])
         ms = self.card(page, "MOVE WHILE SHIFTED",
                        "The direction you move in after shifting (while spamming ability 5). "
@@ -3859,7 +3600,7 @@ class SettingsWindow(tk.Toplevel):
                                               self.on_move_shifted_pick)
         self.move_shifted_dd.pack(fill="x")
 
-        # section 5: fix retry
+        # section 4: fix retry
         self.v_fix = tk.BooleanVar(value=settings["fix_retry"])
         f = self.card(page, "FIX RETRY",
                       "Turn this on if the retry button is not being detected. The macro then "
@@ -3925,9 +3666,73 @@ class SettingsWindow(tk.Toplevel):
         self.pos_wait_release = True      # let go of the mouse button that pressed "Set position"
         self.refresh_fix_pos()
         self.say("Click the retry button now (Esc to cancel).")
+        set_move_cursor()                 # move cursor while picking ...
+        self.make_pos_tip()               # ... with the live coordinates at its bottom right
         self.poll_pos_capture()
 
+    def make_pos_tip(self):
+        """Small click-through label that follows the cursor and shows its coordinates."""
+        self.destroy_pos_tip()
+        # screenshot-style tint over every screen (the click is taken by it, so it can't press
+        # anything in the game while the position is being picked)
+        try:
+            gm = ctypes.windll.user32.GetSystemMetrics
+            vx, vy, vw, vh = gm(76), gm(77), gm(78), gm(79)      # the whole virtual screen
+            shade = tk.Toplevel(self)
+            shade.overrideredirect(True)
+            shade.configure(bg="#000000", cursor="fleur")
+            shade.attributes("-topmost", True)
+            shade.attributes("-alpha", POS_TINT_ALPHA)
+            shade.geometry(f"{vw}x{vh}+{vx}+{vy}")
+            self.pos_shade = shade
+        except (tk.TclError, OSError):
+            self.pos_shade = None
+        tip = tk.Toplevel(self)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        lbl = tk.Label(tip, text="", font=("Consolas", 10, "bold"), fg="#ffffff", bg="#111827",
+                       padx=6, pady=2, bd=1, relief="solid")
+        lbl.pack()
+        tip.update_idletasks()
+        try:     # click-through + never takes focus
+            hwnd = ctypes.windll.user32.GetAncestor(tip.winfo_id(), 2)
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+            ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x20 | 0x80 | 0x08000000)
+        except Exception:  # noqa: BLE001
+            pass
+        self.pos_tip, self.pos_tip_label = tip, lbl
+
+    def update_pos_tip(self, x, y):
+        tip = getattr(self, "pos_tip", None)
+        if tip is None:
+            return
+        try:
+            self.pos_tip_label.configure(text=f"{x}, {y}")
+            tip.update_idletasks()
+            w, h = tip.winfo_reqwidth(), tip.winfo_reqheight()
+            px, py = x + 18, y + 22                        # bottom right of the cursor
+            if px + w > tip.winfo_screenwidth():          # near the screen edge: flip to the other side
+                px = x - w - 8
+            if py + h > tip.winfo_screenheight():
+                py = y - h - 8
+            tip.geometry(f"+{px}+{py}")
+            tip.lift()
+        except tk.TclError:
+            self.pos_tip = None
+
+    def destroy_pos_tip(self):
+        for name in ("pos_tip", "pos_shade"):      # the coordinate label and the screen tint
+            win = getattr(self, name, None)
+            setattr(self, name, None)
+            if win is not None:
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+
     def cancel_pos_capture(self):
+        self.destroy_pos_tip()
+        restore_cursors()
         if self.pos_capturing:
             self.pos_capturing = False
             try:
@@ -3944,16 +3749,20 @@ class SettingsWindow(tk.Toplevel):
             self.say("Cancelled.")
             return
         down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)  # left mouse button
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        pt = POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        self.update_pos_tip(int(pt.x), int(pt.y))             # live coordinates next to the cursor
         if self.pos_wait_release:
             if not down:
                 self.pos_wait_release = False
         elif down:
-            class POINT(ctypes.Structure):
-                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-            pt = POINT()
-            user32.GetCursorPos(ctypes.byref(pt))
             settings["fix_retry_pos"] = [int(pt.x), int(pt.y)]
             self.pos_capturing = False
+            self.destroy_pos_tip()
+            restore_cursors()
             save_stats()
             self.refresh_fix_pos()
             self.say(f"Saved position ({pt.x}, {pt.y}).", good=True)
@@ -3972,10 +3781,6 @@ class SettingsWindow(tk.Toplevel):
         settings["low_quality"] = bool(self.v_lowq.get())
         save_stats()
         self.say("Low quality mode " + ("on" if settings["low_quality"] else "off"), good=True)
-
-    def on_movement_pick(self, key):
-        self.v_movement.set(key)
-        self.commit()
 
     def on_family_pick(self, key):
         self.v_family.set(key)
@@ -4027,8 +3832,6 @@ class SettingsWindow(tk.Toplevel):
         wh["notify_error"] = bool(self.v_error.get())
         fam = self.v_family.get()
         settings["family"] = fam if fam in FAMILIES else DEFAULT_FAMILY
-        mov = self.v_movement.get()
-        settings["movement"] = mov if mov in MOVEMENTS else DEFAULT_MOVEMENT
         ms = self.v_move_shifted.get()
         settings["move_shifted"] = ms if ms in MOVE_SHIFTED_OPTIONS else DEFAULT_MOVE_SHIFTED
         save_stats()
@@ -4053,10 +3856,52 @@ class SettingsWindow(tk.Toplevel):
 
     def close(self):
         self.cancel_capture()
-        self.pos_capturing = False
+        self.cancel_pos_capture()
         self.commit()
         self.app.settings_win = None
         self.destroy()
+
+
+# ---- "Set position" (Fix retry): move cursor everywhere on screen while picking ----
+_CURSOR_OCR_IDS = (32512, 32513, 32515, 32649)   # arrow, text, cross, hand: all become the move cursor
+_cursor_replaced = False
+POS_TINT_ALPHA = 0.65     # how dark the screen gets while picking the position (0 = clear, 1 = black)
+
+
+def set_move_cursor():
+    """Turn the system cursors into the Windows "move" cursor (four arrows), also over other windows."""
+    global _cursor_replaced
+    if _cursor_replaced:
+        return
+    try:
+        u = ctypes.windll.user32
+        u.LoadCursorW.restype = ctypes.c_void_p
+        u.LoadCursorW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        u.CopyIcon.restype = ctypes.c_void_p
+        u.CopyIcon.argtypes = [ctypes.c_void_p]
+        u.SetSystemCursor.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        for target in _CURSOR_OCR_IDS:
+            handle = u.CopyIcon(u.LoadCursorW(None, 32646))     # IDC_SIZEALL
+            if handle:
+                u.SetSystemCursor(handle, target)    # (Windows owns / frees the copy)
+        _cursor_replaced = True
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def restore_cursors():
+    """Give the normal system cursors back."""
+    global _cursor_replaced
+    if not _cursor_replaced:
+        return
+    _cursor_replaced = False
+    try:
+        ctypes.windll.user32.SystemParametersInfoW(0x0057, 0, None, 0)   # SPI_SETCURSORS
+    except Exception:  # noqa: BLE001
+        pass
+
+
+atexit.register(restore_cursors)      # never leave the move cursor behind
 
 
 def apply_theme(name):
