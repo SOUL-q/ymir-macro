@@ -845,6 +845,7 @@ results = {"completed": 0, "failed": 0}
 worker = None
 
 _sct = None
+_sct_lock = threading.Lock()   # guards _sct re-creation when the monitor turns off/on
 _monitor = None
 _scale = 1.0     # real screen height / BASE_HEIGHT (set when the macro starts)
 _retry_template = None
@@ -1130,16 +1131,83 @@ def find_template(screen_bgr, template, threshold, scales=None):
     return None
 
 
+# --- Monitor turned off (DisplayPort drops the display when the monitor is switched off) ---
+_MONITOR_OFF_RETRY_INTERVAL = 2.0   # seconds between reinit attempts while the monitor is off
+_monitor_was_off = False            # used to log "monitor back" once
+
+
+def _reinit_mss():
+    """Create a fresh mss instance (called when a grab fails or returns a black frame).
+    Returns True when the new instance works, False when the monitor is still unreachable."""
+    global _sct, _monitor, _scale
+    with _sct_lock:
+        # Close the stale instance cleanly (best-effort).
+        try:
+            if _sct is not None:
+                _sct.close()
+        except Exception:  # noqa: BLE001
+            pass
+        new_sct = None
+        try:
+            new_sct = mss.mss()
+            mon = new_sct.monitors[MONITOR_INDEX]
+            # Quick sanity-grab to confirm the monitor is really back.
+            test = np.array(new_sct.grab(mon))
+            if test.max() == 0:
+                new_sct.close()
+                return False
+            _sct = new_sct
+            _monitor = mon
+            _scale = FORCE_SCALE if FORCE_SCALE else _monitor["height"] / BASE_HEIGHT
+            return True
+        except Exception:  # noqa: BLE001
+            try:
+                if new_sct is not None:
+                    new_sct.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+
+
 def grab_screen():
     """The screen as a BGR image, always scaled to 1080p size so the template images (which are
     1080p) match on any resolution. Positions in this image are 1080p positions: multiply by
-    _scale to get real screen pixels."""
-    shot = np.array(_sct.grab(_monitor))
-    img = cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
-    if abs(_scale - 1.0) > 0.01:
-        interp = cv2.INTER_AREA if _scale > 1 else cv2.INTER_CUBIC
-        img = cv2.resize(img, None, fx=1 / _scale, fy=1 / _scale, interpolation=interp)
-    return img
+    _scale to get real screen pixels.
+
+    If the monitor is turned off (physical button), mss raises or returns a black frame.
+    The function then waits in a loop, logging once, until the monitor comes back, and
+    continues transparently so the macro never crashes or stops. Stop (F7) still works
+    while it waits."""
+    global _monitor_was_off
+    while True:
+        try:
+            shot = np.array(_sct.grab(_monitor))
+            img = cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
+            # An all-black frame means the monitor is off (or going to sleep).
+            if img.max() == 0:
+                raise OSError("All-black frame - monitor appears to be off")
+            if _monitor_was_off:
+                _monitor_was_off = False
+                log("Monitor is back - resuming screen detection")
+            if abs(_scale - 1.0) > 0.01:
+                interp = cv2.INTER_AREA if _scale > 1 else cv2.INTER_CUBIC
+                img = cv2.resize(img, None, fx=1 / _scale, fy=1 / _scale, interpolation=interp)
+            return img
+        except SystemExit:
+            raise
+        except Exception:  # noqa: BLE001
+            if not _monitor_was_off:
+                _monitor_was_off = True
+                log("Monitor appears to be off - waiting for it to come back (screen detection paused)")
+            if state["quit"]:
+                raise SystemExit
+            # Try to reconnect mss; if it fails, wait and try again (in short steps, so Stop works).
+            if not _reinit_mss():
+                end = time.time() + _MONITOR_OFF_RETRY_INTERVAL
+                while time.time() < end:
+                    if state["quit"]:
+                        raise SystemExit
+                    time.sleep(0.1)
 
 
 def red_mask(bgr):
@@ -1900,9 +1968,10 @@ def macro_main():
                     f"{FIX_RETRY_WAIT:g}s after COMPLETED / FAILED shows up")
         log("Started. Click into Roblox; the routine starts when the mission begins.")
 
-        with mss.mss() as sct:
-            _sct = sct
-            _monitor = sct.monitors[MONITOR_INDEX]
+        # Initialise mss manually so _reinit_mss() can replace it while running.
+        try:
+            _sct = mss.mss()
+            _monitor = _sct.monitors[MONITOR_INDEX]
             _scale = FORCE_SCALE if FORCE_SCALE else _monitor["height"] / BASE_HEIGHT
             if abs(_scale - 1.0) > 0.01:
                 log(f"Screen is {_monitor['width']}x{_monitor['height']}: scaling the picture "
@@ -2003,6 +2072,15 @@ def macro_main():
                     wait_for_icon_gone()
                     after_retry = True
                     need_start = True
+        finally:
+            # Clean up the mss instance (whether we're stopping or _reinit_mss() replaced it):
+            # close whatever is current now.
+            with _sct_lock:
+                try:
+                    if _sct is not None:
+                        _sct.close()
+                except Exception:  # noqa: BLE001
+                    pass
     except SystemExit:
         log("Stopped")
     except Exception as e:  # noqa: BLE001 - show any error in the window
