@@ -1,7 +1,7 @@
 ![image](image/ymir_logo_app.png)
 
 AOT:R mission macro with a clean status window. Uses external keyboard/mouse input only. Only does Outskirts : Skirmish, must have Colossal serum.
-Made with love and passion. Watch the Explanation [here](https://www.youtube.com/feed/history).
+Made with love and passion. Watch the Explanation [here]([https://www.youtube.com/feed/history](https://www.youtube.com/watch?v=PebrFqLHBug)).
 
 ## Features
 - Automatic mission routine (abilities, dashes, strafes, shift) with RETRY detection
@@ -14,9 +14,6 @@ Made with love and passion. Watch the Explanation [here](https://www.youtube.com
 ### Supports various themes
 ![image](documentation/themes.png)
 
-### Adapts to different types of movements
-![image](documentation/movements.png)
-
 ### Adapts to different types of playstyles
 ![image](documentation/abilities.png)
 
@@ -24,7 +21,6 @@ Made with love and passion. Watch the Explanation [here](https://www.youtube.com
  ### Shiki:
 ![image](documentation/layout_shiki.png)
 
-![image](documentation/shiki_config.png)
 - Recommended to use <img src="documentation/divine.webp" width="20" height="20"> <img src="documentation/godforged.svg" height="18" alt="GODFORGED"> ; Can use artifacts with TS stats too
 - Must have Founder's blessing ; better if you have avatar of ymir
 - Recommended to use cloak (not scorched cloak)
@@ -34,20 +30,18 @@ Made with love and passion. Watch the Explanation [here](https://www.youtube.com
  ### Blood awakening:
 ![image](documentation/layout_blood.png)
 
-![image](documentation/blood_config.png)
-- Not a lot of requirements for it but try to avoid using Frtiz/Yeager.
+- Not a lot of requirements for it but try to avoid using `Frtiz`/`Yeager`.
 - Use your best Shifter Build for colossal titan. Avoid Tatsujin/Flashsteps/Wings of freedom
 - If you use wings of freedom select that in config
 
-### Fritz <img src="documentation/beta.svg" height="16" alt="Beta"> :
-![image](documentation/fritz_layout.png)
+### Universal :
+![image](documentation/layout_all.png)
 
-![image](documentation/fritz_config.png)
-- Recommended to use  <img src="documentation/godforged.svg" height="18" alt="GODFORGED"> and <img src="documentation/avatar-of-ymir.svg" height="20" alt="AOY">
-- Still in testing so dont expect good results yet
-- Recommended to use Afterimages
-- Currently the mission completion is very slow
-- Expect the macro to shift AFTER reviving 60% of the time wasting a lot of time
+- Founder's Blessing and Godforged required
+- Works with every family but works better with `Reiss` and `Fritz`
+- Dont unlock skill tree for `Fritz`
+- Use cloak artifact
+- Apotheosis and Afterimages helps
 
 ## Requirements
 - Windows, Python 3.10+
