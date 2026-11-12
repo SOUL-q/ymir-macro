@@ -17,22 +17,7 @@ Made with love and passion. Watch the Explanation [here]([https://www.youtube.co
 ### Adapts to different types of playstyles
 ![image](documentation/abilities.png)
 
-## Builds/layout (Important
- ### Shiki:
-![image](documentation/layout_shiki.png)
-
-- Recommended to use <img src="documentation/divine.webp" width="20" height="20"> <img src="documentation/godforged.svg" height="18" alt="GODFORGED"> ; Can use artifacts with TS stats too
-- Must have Founder's blessing ; better if you have avatar of ymir
-- Recommended to use cloak (not scorched cloak)
-- in config select Shiki on both Movement and Abilities
-- Recommended to use Afterimages
-
- ### Blood awakening:
-![image](documentation/layout_blood.png)
-
-- Not a lot of requirements for it but try to avoid using `Frtiz`/`Yeager`.
-- Use your best Shifter Build for colossal titan. Avoid Tatsujin/Flashsteps/Wings of freedom
-- If you use wings of freedom select that in config
+## Builds/layout (Important)
 
 ### Universal :
 ![image](documentation/layout_all.png)
@@ -42,6 +27,22 @@ Made with love and passion. Watch the Explanation [here]([https://www.youtube.co
 - Dont unlock skill tree for `Fritz`
 - Use cloak artifact
 - Apotheosis and Afterimages helps
+
+ ### Blood awakening:
+![image](documentation/layout_blood.png)
+
+- Not a lot of requirements for it but try to avoid using `Frtiz`/`Yeager`.
+- Use your best Shifter Build for colossal titan. Avoid Tatsujin/Flashsteps/Wings of freedom
+- If you use wings of freedom select that in config
+
+ ### Shiki:
+![image](documentation/layout_shiki.png)
+
+- Recommended to use <img src="documentation/divine.webp" width="20" height="20"> <img src="documentation/godforged.svg" height="18" alt="GODFORGED"> ; Can use artifacts with TS stats too
+- Must have Founder's blessing ; better if you have avatar of ymir
+- Recommended to use cloak (not scorched cloak)
+- in config select Shiki on both Movement and Abilities
+- Recommended to use Afterimages
 
 ## Requirements
 - Windows, Python 3.10+
