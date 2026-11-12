@@ -27,7 +27,7 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.3.2"        # release version tag
+VERSION = "v1.3.3"        # release version tag
                           # (shown in the footer, next to "Always on top")
 
 # --- Update checker (footer > Updates) ---
@@ -416,8 +416,8 @@ GAME_BINDS = {
     "ability4": ("Ability 4", KEY_ABILITY_3RD),
     "ability5": ("Ability 5", KEY_ABILITY_LAST),
     "dash": ("Dash", KEY_DASH),
-    "strafe": ("Strafe A", KEY_STRAFE),
-    "strafe_d": ("Strafe D", KEY_STRAFE_D),
+    "strafe": ("Strafe left", KEY_STRAFE),
+    "strafe_d": ("Strafe right", KEY_STRAFE_D),
     "grab": ("Escape grab", KEY_GRAB),
 }
 BIND_LABELS = {k: v[0] for k, v in {**HOTKEY_BINDS, **GAME_BINDS}.items()}
@@ -445,6 +445,7 @@ settings = {
     "webhook": dict(DEFAULT_WEBHOOK),
     "family": DEFAULT_FAMILY,
     "theme": DEFAULT_THEME,
+    "keyboard_layout": "auto",              # auto / qwerty / azerty / qwertz (see key_label)
     "move_shifted": DEFAULT_MOVE_SHIFTED,   # direction held at step 9: Left (A) / Right (D) / Stand
     "failsafe": dict(DEFAULT_FAILSAFE),     # stuck-mission rescue: time before it triggers + click spot
     "retry_scale": None,    # template size that last found the retry button on a non-1080p screen
@@ -492,6 +493,8 @@ def load_settings(saved):
         settings["family"] = saved["family"]
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
+    if saved.get("keyboard_layout") in LAYOUT_CHOICES:
+        settings["keyboard_layout"] = saved["keyboard_layout"]
     if saved.get("move_shifted") in MOVE_SHIFTED_OPTIONS:
         settings["move_shifted"] = saved["move_shifted"]
     fs = saved.get("failsafe")
@@ -586,12 +589,76 @@ def register_hotkeys():
             log(f"Error: could not bind hotkey '{key}': {e}")
 
 
+# ---------------------------- keyboard layouts ----------------------------
+# The macro presses keys by their PHYSICAL position (pydirectinput sends scan codes, named after a
+# US keyboard). The saved keybinds are those physical names, so they never change when the layout
+# does. The layout only matters when a key is captured (letter on the keycap -> physical key) and
+# when it is shown (physical key -> letter on the keycap).
+LAYOUT_CHOICES = ("auto", "qwerty", "azerty", "qwertz")
+LAYOUT_NAMES = {"qwerty": "QWERTY", "azerty": "AZERTY", "qwertz": "QWERTZ"}
+# keycap character -> physical (US) key name. Anything missing is the same on both.
+_KEYCAP_TO_US = {
+    "qwerty": {},
+    "azerty": {"a": "q", "q": "a", "z": "w", "w": "z", "m": ";", ",": "m", ";": ",", ":": ".",
+               "!": "/", ")": "-",
+               "&": "1", "\u00e9": "2", '"': "3", "'": "4", "(": "5", "-": "6", "\u00e8": "7",
+               "_": "8", "\u00e7": "9", "\u00e0": "0"},
+    "qwertz": {"z": "y", "y": "z", "\u00f6": ";", "\u00e4": "'", "\u00fc": "[", "\u00df": "-",
+               "+": "]", "-": "/", "#": "\\"},
+}
+# physical key -> keycap character (the digit row keeps its digits: "1" is easier to read than "&")
+_US_TO_KEYCAP = {
+    lay: {us: cap for cap, us in table.items() if not us.isdigit()}
+    for lay, table in _KEYCAP_TO_US.items()
+}
+
+
+def detect_layout():
+    """qwerty / azerty / qwertz, read from the keyboard layout Windows is using. It asks which
+    letter sits on the physical Q and Y keys, so any language variant of these layouts works."""
+    if sys.platform != "win32":
+        return "qwerty"
+    try:
+        u32 = ctypes.windll.user32
+        u32.GetKeyboardLayout.argtypes = [ctypes.c_uint32]
+        u32.GetKeyboardLayout.restype = ctypes.c_void_p
+        u32.GetForegroundWindow.restype = ctypes.c_void_p
+        u32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        u32.GetWindowThreadProcessId.restype = ctypes.c_uint32
+        u32.MapVirtualKeyExW.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+        u32.MapVirtualKeyExW.restype = ctypes.c_uint
+        fg = u32.GetForegroundWindow()
+        hkl = u32.GetKeyboardLayout(u32.GetWindowThreadProcessId(fg, None) if fg else 0)
+        if not hkl:
+            hkl = u32.GetKeyboardLayout(0)
+        first_letter = u32.MapVirtualKeyExW(0x10, 1, hkl)    # scan code of the top-left letter key
+        if first_letter == 0x41:                              # 'A' there = AZERTY
+            return "azerty"
+        if u32.MapVirtualKeyExW(0x2C, 1, hkl) == 0x59:        # 'Y' on the bottom-left key = QWERTZ
+            return "qwertz"
+    except Exception:  # noqa: BLE001
+        pass
+    return "qwerty"
+
+
+def current_layout():
+    choice = settings.get("keyboard_layout", "auto")
+    return detect_layout() if choice not in LAYOUT_NAMES else choice
+
+
+def key_label(key):
+    """What to show for a saved game key: the letter printed on the user's keycap, upper case."""
+    return _US_TO_KEYCAP[current_layout()].get(key, key).upper()
+
+
 def to_game_key(name, keypad=False):
     """Turn a name from the keyboard library ('left shift') into one pydirectinput
     understands ('shiftleft'). Returns None if pydirectinput can't press that key."""
     n = name.lower().strip()
     if keypad and n.isdigit():
         n = "num" + n
+    elif not keypad:
+        n = _KEYCAP_TO_US[current_layout()].get(n, n)    # letter on the keycap -> physical key
     for side in ("left", "right"):
         if n.startswith(side + " "):
             n = n[len(side) + 1:] + side
@@ -1299,7 +1366,7 @@ def check_grabbed(screen):
         return   # Shiki: ability 1 is a perk, no need to press it
     if find_template(red_mask(screen), _grab_template, GRAB_THRESHOLD):
         _last_grab = time.time()
-        log(f"Grabbed! Pressing {KEY_GRAB.upper()}")
+        log(f"Grabbed! Pressing {key_label(KEY_GRAB)}")
         tap(KEY_GRAB)
 
 
@@ -1756,7 +1823,7 @@ def buy_time_until_ability4_ready():
                                      SHIKI_ABILITY4_THRESHOLD) is not None:
                 log("Shiki ability 4 icon seen")
                 return True
-        detail(f"Strafing {KEY_STRAFE.upper()}... ability 4 ready in {remaining:.0f}s")
+        detail(f"Strafing {key_label(KEY_STRAFE)}... ability 4 ready in {remaining:.0f}s")
         if now >= next_strafe:
             double_tap(keys[i % len(keys)])
             i += 1
@@ -1827,7 +1894,7 @@ def shift_sequence():
     set_step(8)
     move = settings["move_shifted"]
     hold_key = KEY_STRAFE_D if move == "Right" else KEY_STRAFE if move == "Left" else None
-    hold_txt = f"holding {hold_key.upper()}" if hold_key else "standing still"
+    hold_txt = f"holding {key_label(hold_key)}" if hold_key else "standing still"
     log(f"Ability 5 over and over + {hold_txt} (until the mission ends "
         f"or the mission passes {mission_timeout():g}s)")
     presses = 0
@@ -1842,7 +1909,7 @@ def shift_sequence():
                 if d_held:                       # mission too long: let go of the key
                     pydirectinput.keyUp(hold_key)
                     d_held = False
-                    log(f"Mission over {mission_timeout():g}s - released {hold_key.upper()}")
+                    log(f"Mission over {mission_timeout():g}s - released {key_label(hold_key)}")
             elif hold_key and not d_held:
                 pydirectinput.keyDown(hold_key)   # hold A / D (the end of the mission ends this)
                 d_held = True
@@ -1884,7 +1951,7 @@ def run_mission():
     spam_recorded_dash(KEY_DASH, UNIVERSAL_DASH_TIME)
 
     set_step(2)
-    show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
+    show("Strafe", f"Double-tap {key_label(KEY_STRAFE)}")
     log("Strafe")
     double_tap(KEY_STRAFE)
     wait(0.3)
@@ -1914,7 +1981,7 @@ def run_mission():
             wait(AFTER_ABILITY_DELAY)
         else:
             set_step(4)
-            show("Buying time", f"Strafing {KEY_STRAFE.upper()} until ability 4 is off cooldown")
+            show("Buying time", f"Strafing {key_label(KEY_STRAFE)} until ability 4 is off cooldown")
             log(f"Buying time for {ABILITY4_COOLDOWN:.0f}s (ability 4 cooldown)")
             icon_seen = buy_time_until_ability4_ready()
 
@@ -3458,6 +3525,15 @@ class SettingsWindow(tk.Toplevel):
 
     # ----- keybinds tab -----
     def build_keys(self, page):
+        c = self.card(page, "KEYBOARD LAYOUT",
+                      "Auto picks yours. Change it if keys show up wrong.")
+        badges = {"auto": ("*", "#7a8398", "#ffffff"), "qwerty": ("Q", "#3b82f6", "#ffffff"),
+                  "azerty": ("A", "#14b8a6", "#ffffff"), "qwertz": ("Z", "#f59e0b", "#ffffff")}
+        items = [("auto", f"Auto (detected: {LAYOUT_NAMES[detect_layout()]})", badges["auto"], None)]
+        items += [(k, LAYOUT_NAMES[k], badges[k], None) for k in LAYOUT_NAMES]
+        self.layout_dd = ModernDropdown(c, items, settings["keyboard_layout"],
+                                        self.on_layout_pick)
+        self.layout_dd.pack(fill="x")
         c = self.card(page, "HOTKEYS", "Work even while Roblox is focused.")
         for bind_id, (label, _default) in HOTKEY_BINDS.items():
             self.key_row(c, bind_id, label)
@@ -3472,19 +3548,28 @@ class SettingsWindow(tk.Toplevel):
         reset.bind("<Enter>", lambda _e: reset.configure(fg=App.TEXT))
         reset.bind("<Leave>", lambda _e: reset.configure(fg=App.SUB))
 
+    def on_layout_pick(self, key):
+        settings["keyboard_layout"] = key if key in LAYOUT_CHOICES else "auto"
+        save_stats()
+        self.refresh_key_buttons()
+
+    def shown_key(self, bind_id):
+        key = settings["keybinds"][bind_id]
+        return key_label(key) if bind_id in GAME_BINDS else key
+
     def key_row(self, parent, bind_id, label):
         row = tk.Frame(parent, bg=App.CARD)
         row.pack(fill="x", pady=4)
         tk.Label(row, text=label, font=(App.FONT, 10), fg=App.TEXT,
                  bg=App.CARD).pack(side="left")
-        btn = KeyButton(row, settings["keybinds"][bind_id],
+        btn = KeyButton(row, self.shown_key(bind_id),
                         lambda b=bind_id: self.start_capture(b))
         btn.pack(side="right")
         self.key_buttons[bind_id] = btn
 
     def refresh_key_buttons(self):
         for bind_id, btn in self.key_buttons.items():
-            btn.show_key(settings["keybinds"][bind_id])
+            btn.show_key(self.shown_key(bind_id))
 
     def start_capture(self, bind_id):
         if running():
@@ -3531,11 +3616,13 @@ class SettingsWindow(tk.Toplevel):
             key = name
         for other, value in settings["keybinds"].items():
             if other != bind_id and value == key:
-                self.say(f"{key.upper()} is already used by {BIND_LABELS[other]}.", error=True)
+                self.say(f"{key_label(key) if bind_id in GAME_BINDS else key.upper()} "
+                         f"is already used by {BIND_LABELS[other]}.", error=True)
                 return
         settings["keybinds"][bind_id] = key
         self.keybinds_changed()
-        self.say(f"{BIND_LABELS[bind_id]} = {key.upper()}", good=True)
+        self.say(f"{BIND_LABELS[bind_id]} = "
+                 f"{key_label(key) if bind_id in GAME_BINDS else key.upper()}", good=True)
 
     def reset_keybinds(self):
         if running():
@@ -3669,7 +3756,7 @@ class SettingsWindow(tk.Toplevel):
         self.v_move_shifted = tk.StringVar(value=settings["move_shifted"])
         ms = self.card(page, "MOVE WHILE SHIFTED",
                        "The direction you move in after shifting (while spamming ability 5). "
-                       f"Left holds {KEY_STRAFE.upper()}, Right holds {KEY_STRAFE_D.upper()}, "
+                       f"Left holds {key_label(KEY_STRAFE)}, Right holds {key_label(KEY_STRAFE_D)}, "
                        "Stand holds nothing.")
         ms_items = [(o, o, MOVE_SHIFTED_BADGES[o], None) for o in MOVE_SHIFTED_OPTIONS]
         self.move_shifted_dd = ModernDropdown(ms, ms_items, settings["move_shifted"],
