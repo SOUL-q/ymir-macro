@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import cv2
 import keyboard
@@ -27,7 +27,7 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.3.0"        # release version tag
+VERSION = "v1.3.2"        # release version tag
                           # (shown in the footer, next to "Always on top")
 
 # --- Update checker (footer > Updates) ---
@@ -68,7 +68,6 @@ SAVE_CLICK_DEBUG = False   # saves last_retry_click.png showing exactly where it
 # --- Mission result detection (the gold COMPLETED / FAILED text on the end screen) ---
 RESULT_FILES = {"completed": "result_completed.png", "failed": "result_failed.png"}
 RESULT_THRESHOLD = 0.70   # lower it if results aren't detected
-FIX_RETRY_WAIT = 2.0      # "Fix retry": seconds between seeing COMPLETED / FAILED and the click
 
 # --- Loot detection (looked for on the end screen, right before clicking retry) ---
 LOOT_ENABLED = True
@@ -104,18 +103,17 @@ ABILITY4_COOLDOWN = 15.0           # seconds of buying time after ability 3
 ABILITY4_COOLDOWN_MARGIN = 0.3     # tiny extra, so ability 4 is surely off cooldown
 
 # --- Stuck-mission rescue (a very rare obscure bug after the shift can leave the macro stuck) ---
-MISSION_TIMEOUT = 120.0     # a mission longer than this many seconds (2 min) counts as stuck
+MISSION_TIMEOUT = 120.0     # DEFAULT failsafe time (2 min); the live value is in Settings > Configs > Failsafe
+MIN_FAILSAFE_SECONDS = 10   # the failsafe time can't be set lower than this
+MAX_FAILSAFE_MINUTES = 60
 RESCUE_CLICK_DELAY = 0.5    # seconds between the clicks on the middle of the screen
 # Before clicking, the character is forced to look at the ground: press ctrl, move the mouse down
 # for LOOK_DOWN_TIME seconds, press ctrl again.
-# Before that look-down, the "still shifted" check: if the shifted ability 2 icon
-# (shifted_ability2.png, same two folders) is on screen, the player is still shifted, so ability 2
-# (the shifted one) is spammed for STILL_SHIFTED_SPAM_TIME. The wait before looking down
-# (STILL_SHIFTED_WAIT) starts STILL_SHIFTED_WAIT_START seconds after the spam started, so it runs
-# partly during the spam. Then the macro looks down and tries to kill the player.
-SHIFTED_ICON_FILE = "shifted_ability2.png"
-SHIFTED_ICON_THRESHOLD = 0.80        # lower it if the icon isn't being detected
-STILL_SHIFTED_SPAM_TIME = 5.0        # spam ability 2 (shifted) this long
+# Before that look-down, ability 2 is ALWAYS spammed for STILL_SHIFTED_SPAM_TIME (it ejects the
+# player if shifted; no icon check). The wait before looking down (STILL_SHIFTED_WAIT) starts
+# STILL_SHIFTED_WAIT_START seconds after the spam started, so it runs partly during the spam.
+# Then the macro looks down and tries to kill the player.
+STILL_SHIFTED_SPAM_TIME = 5.0        # spam ability 2 this long
 STILL_SHIFTED_SPAM_INTERVAL = 0.1    # seconds between those ability 2 presses
 STILL_SHIFTED_WAIT_START = 2.0       # the wait below starts this many seconds after the spam started
 STILL_SHIFTED_WAIT = 15.0            # wait this long before looking down
@@ -128,6 +126,7 @@ LOOK_DOWN_PIXELS = 15       # pixels moved down per step (relative movement, wor
 # --- Saved stats (kept between runs; the Reset button in the window erases them) ---
 STATS_FILE = "aotr_stats.json"   # saved in Documents\Ymir Macro
 STATS_FOLDER = "Ymir Macro"      # folder created inside your Documents folder
+OVERRIDE_FOLDER = "asset_override"   # inside Documents\Ymir Macro: the user's own pictures win over image/
 IMAGE_FOLDER = "image"           # all images (templates, logo, icon) are loaded from this folder,
                                  # next to this script / .exe
 LOW_FOLDER = "low quality fix"   # inside the image folder: the low graphics looks of the retry button,
@@ -370,6 +369,37 @@ def data_dir():
         return app_dir()   # can't create it: fall back to next to the script
     return path
 
+def override_dir():
+    """Documents\\Ymir Macro\\asset_override - the user's own pictures (not created here)."""
+    return os.path.join(data_dir(), OVERRIDE_FOLDER)
+
+
+def ensure_override_dir():
+    """Create the asset_override folder if it doesn't exist yet and return its path."""
+    path = override_dir()
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
+def override_path(filename):
+    """The user's own copy of an image (asset_override/<filename>) or None if they didn't add one.
+    `filename` is relative to the image folder, e.g. "retry_text.png" or
+    "low quality fix/retry_text.png"."""
+    path = os.path.join(override_dir(), filename)
+    return path if os.path.isfile(path) else None
+
+
+def open_override_folder():
+    """Open the asset_override folder in the file explorer."""
+    try:
+        os.startfile(ensure_override_dir())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 STEP_NAMES = ["Ability 2", "Dashing", "Strafe", "Ability 3",
               "Buying time", "Ability 4", "Shift", "Shifted 4", "Ability 5"]
 
@@ -402,17 +432,21 @@ DEFAULT_WEBHOOK = {
     "notify_error": True,   # message when the macro hits an error
 }
 
+DEFAULT_FAILSAFE = {
+    "minutes": 2,       # failsafe triggers when a mission lasts longer than minutes + seconds
+    "seconds": 0,
+    "click_x": None,    # where the failsafe clicks (screen pixels). None = middle of the screen;
+    "click_y": None,    # a picked coordinate overrides the middle
+}
+
 # the live settings (saved in STATS_FILE under "settings")
 settings = {
     "keybinds": dict(DEFAULT_KEYBINDS),
     "webhook": dict(DEFAULT_WEBHOOK),
     "family": DEFAULT_FAMILY,
     "theme": DEFAULT_THEME,
-    "low_quality": False,   # True = only the "low quality fix" pictures are used
     "move_shifted": DEFAULT_MOVE_SHIFTED,   # direction held at step 9: Left (A) / Right (D) / Stand
-    "fix_retry": False,     # True = end of mission is read from COMPLETED / FAILED, retry is clicked
-                            # at fix_retry_pos
-    "fix_retry_pos": None,  # [x, y] screen pixels picked by the user (None = not set yet)
+    "failsafe": dict(DEFAULT_FAILSAFE),     # stuck-mission rescue: time before it triggers + click spot
     "retry_scale": None,    # template size that last found the retry button on a non-1080p screen
                             # (None = not found yet). Tried first; updated when another size matches
     "always_on_top": False, # footer switch "Always on top" (kept between runs)
@@ -458,26 +492,43 @@ def load_settings(saved):
         settings["family"] = saved["family"]
     if saved.get("theme") in THEMES:
         settings["theme"] = saved["theme"]
-    if isinstance(saved.get("low_quality"), bool):
-        settings["low_quality"] = saved["low_quality"]
     if saved.get("move_shifted") in MOVE_SHIFTED_OPTIONS:
         settings["move_shifted"] = saved["move_shifted"]
+    fs = saved.get("failsafe")
+    if isinstance(fs, dict):
+        def _int(v):
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+        mins, secs = _int(fs.get("minutes")), _int(fs.get("seconds"))
+        if mins is not None and secs is not None:
+            settings["failsafe"]["minutes"] = min(MAX_FAILSAFE_MINUTES, max(0, mins))
+            settings["failsafe"]["seconds"] = min(59, max(0, secs))
+        cx, cy = _int(fs.get("click_x")), _int(fs.get("click_y"))
+        if cx is not None and cy is not None and cx >= 0 and cy >= 0:
+            settings["failsafe"]["click_x"], settings["failsafe"]["click_y"] = cx, cy
     if isinstance(saved.get("always_on_top"), bool):
         settings["always_on_top"] = saved["always_on_top"]
     rs = saved.get("retry_scale")
     if isinstance(rs, (int, float)) and not isinstance(rs, bool) and 0.3 <= rs <= 3.0:
         settings["retry_scale"] = float(rs)
-    if isinstance(saved.get("fix_retry"), bool):
-        settings["fix_retry"] = saved["fix_retry"]
-    pos = saved.get("fix_retry_pos")
-    if (isinstance(pos, (list, tuple)) and len(pos) == 2
-            and all(isinstance(v, int) and not isinstance(v, bool) for v in pos)):
-        settings["fix_retry_pos"] = [pos[0], pos[1]]
     win = saved.get("window")
     if (isinstance(win, dict) and all(
             isinstance(win.get(k), int) and not isinstance(win.get(k), bool)
             for k in ("x", "y", "w", "h"))):
         settings["window"] = {k: win[k] for k in ("x", "y", "w", "h")}
+
+
+def mission_timeout():
+    """Seconds a mission may last before the failsafe (stuck-mission rescue) triggers."""
+    fs = settings["failsafe"]
+    return float(max(MIN_FAILSAFE_SECONDS, fs["minutes"] * 60 + fs["seconds"]))
+
+
+def failsafe_click_point(cx, cy):
+    """Where the failsafe clicks: the picked coordinate if there is one, else (cx, cy)."""
+    fs = settings["failsafe"]
+    if fs["click_x"] is not None and fs["click_y"] is not None:
+        return fs["click_x"], fs["click_y"]
+    return cx, cy
 
 
 # ----------------------------- hotkeys ----------------------------------
@@ -659,7 +710,8 @@ def notify_mission_async(result, found):
 
 def rescue_embed(eliminated, mission_no, mission_seconds=None):
     """Discord embed for the stuck-mission rescue: it started / it worked."""
-    limit = f"{int(MISSION_TIMEOUT // 60)}m {int(MISSION_TIMEOUT % 60):02d}s"
+    timeout = mission_timeout()
+    limit = f"{int(timeout // 60)}m {int(timeout % 60):02d}s"
     if eliminated:
         embed = {
             "title": f"Mission #{mission_no} - Player eliminated",
@@ -675,7 +727,7 @@ def rescue_embed(eliminated, mission_no, mission_seconds=None):
             "color": 0xFBBF24,
             "description": f"This mission ran longer than {limit}, so the macro is now "
                            "**trying to eliminate the player** (looking at the ground, then "
-                           "clicking the middle of the screen until retry shows up).",
+                           "clicking until retry shows up).",
         }
     embed["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return embed
@@ -852,7 +904,6 @@ _retry_template = None
 _alt_retry_templates = []        # extra looks of the retry button: [(templates, dx)] - see load_alt_retry()
 _start_template = None
 _shiki_ability4_icon = None      # Shiki: ability 4 icon, seen = ability 4 is ready
-_shifted_icon = None             # shifted ability 2 icon: seen at the rescue = player is still shifted
 _loot_templates = {}
 _result_templates = {}
 _grab_template = None
@@ -861,12 +912,10 @@ _last_grab = 0.0
 
 
 class RetryFound(Exception):
-    def __init__(self, match, quality="normal", kind=None):
+    def __init__(self, match, quality="normal"):
         super().__init__("retry button found")
         self.match = match
-        self.quality = quality    # which look matched: "normal" or "low" (low graphics),
-                                  # or "fix" (Fix retry: the COMPLETED / FAILED text was seen)
-        self.kind = kind          # "completed" / "failed" (Fix retry only)
+        self.quality = quality    # which look matched: "normal" or "low" (low graphics)
 
 
 def log(msg):
@@ -1030,7 +1079,28 @@ def request_start():
 
 
 # ------------------------- screen detection -----------------------------
+def _read_image(path):
+    """cv2.imread that also works with non-ASCII folder names (Documents of a user called "José")."""
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def load_template(filename):
+    """Load one picture. The user's own copy in asset_override wins over the built-in one.
+    Their picture is taken on THEIR screen, so it is scaled to the 1080p size the screen is
+    matched at (see grab_screen); the built-in pictures already are 1080p."""
+    mine = override_path(filename)
+    if mine:
+        img = _read_image(mine)
+        if img is not None:
+            if abs(_scale - 1.0) > 0.01:
+                interp = cv2.INTER_AREA if _scale > 1 else cv2.INTER_CUBIC
+                img = cv2.resize(img, None, fx=1 / _scale, fy=1 / _scale, interpolation=interp)
+            return img
+        log(f"asset_override: could not read {filename} - using the built-in picture")
     path = asset_path(filename)
     img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
@@ -1040,19 +1110,22 @@ def load_template(filename):
 
 def load_quality_templates(filename):
     """{"normal": img, "low": img} for one template. The normal one is image/<filename>, the low
-    graphics one is image/low quality fix/<filename>. At least one of them has to exist."""
-    low_only = settings["low_quality"]      # low quality mode: the normal picture is never used
+    graphics one is image/low quality fix/<filename>. At least one of them has to exist.
+    If the user put their own copy of it in asset_override, ONLY their copy is used (the built-in
+    looks of that picture are skipped, they are what didn't match on their setup)."""
+    names = (("normal", filename), ("low", os.path.join(LOW_FOLDER, filename)))
+    mine = {q for q, name in names
+            if override_path(name)}
     found = {}
-    for quality, name in (("normal", filename), ("low", os.path.join(LOW_FOLDER, filename))):
-        if low_only and quality == "normal":
+    for quality, name in names:
+        if mine and quality not in mine:
             continue
         try:
             found[quality] = load_template(name)
         except FileNotFoundError:
             pass
     if not found:
-        shown = os.path.join(LOW_FOLDER, filename) if low_only else filename
-        raise FileNotFoundError(f"Could not load template image: {asset_path(shown)}")
+        raise FileNotFoundError(f"Could not load template image: {asset_path(filename)}")
     return found
 
 
@@ -1249,6 +1322,9 @@ def load_alt_retry():
     x0, x1 = ALT_RETRY_WORD_COLS
     word, dx = {}, 0
     for quality, img in whole.items():
+        name = ALT_RETRY_FILE if quality == "normal" else os.path.join(LOW_FOLDER, ALT_RETRY_FILE)
+        if override_path(name):
+            continue     # the user's own picture: the word columns are the built-in one's, skip the crop
         w = img.shape[1]
         if 0 <= x0 < x1 <= w:
             word[quality] = img[:, x0:x1]
@@ -1324,43 +1400,13 @@ def find_retry(screen):
     return found[:2] if found else None
 
 
-def fix_retry_active():
-    """Fix retry is on, a click position is saved and the result pictures are loaded."""
-    return bool(settings["fix_retry"] and settings["fix_retry_pos"] and _result_templates)
-
-
-def find_result(screen):
-    """The COMPLETED / FAILED text on screen: (kind, (cx, cy, score, w, h)) or None."""
-    if not _result_templates:
-        return None
-    mask = gold_mask(screen)
-    best = None
-    for kind, tpl in _result_templates.items():
-        th, tw = tpl.shape[:2]
-        if th > mask.shape[0] or tw > mask.shape[1]:
-            continue
-        res = cv2.matchTemplate(mask, tpl, cv2.TM_CCOEFF_NORMED)
-        _, score, _, loc = cv2.minMaxLoc(res)
-        if score >= relax(RESULT_THRESHOLD) and (best is None or score > best[1][2]):
-            best = (kind, (loc[0] + tw // 2, loc[1] + th // 2, score, tw, th))
-    return best
-
-
 def scan_for_retry():
     """Look for the end of the mission once (and for a grab). Raises RetryFound if it is there.
-    Normal: the retry button. Fix retry: the COMPLETED / FAILED text."""
+    The end of the mission is the retry button."""
     global _last_scan
     _last_scan = time.time()
     screen = grab_screen()
     check_grabbed(screen)
-    if fix_retry_active():
-        seen = find_result(screen)
-        if seen:
-            time.sleep(RETRY_CONFIRM_DELAY)          # text fades in: make sure it stays
-            again = find_result(grab_screen())
-            if again and again[0] == seen[0]:
-                raise RetryFound(again[1], "fix", again[0])
-        return
     found = find_retry(screen)
     if found:
         match = found[0]
@@ -1415,17 +1461,10 @@ def click_middle(cx, cy):
     pydirectinput.click()
 
 
-def still_shifted():
-    """True when the shifted ability 2 icon is on screen (the player is still shifted)."""
-    if not _shifted_icon:
-        return False
-    return find_quality_template(grab_screen(), _shifted_icon, SHIFTED_ICON_THRESHOLD) is not None
-
-
 def rescue_clicks(debug=False):
-    """Stuck mission (longer than MISSION_TIMEOUT): look at the ground (ctrl, mouse down for 2s,
-    ctrl), then click the middle of the screen every RESCUE_CLICK_DELAY seconds until the retry
-    button can be seen. The retry button being found raises RetryFound, so the normal
+    """Stuck mission (longer than the failsafe time): spam ability 2, wait, look at the ground
+    (ctrl, mouse down for 2s, ctrl), then click (middle of the screen, or the coordinate picked in
+    Settings) every RESCUE_CLICK_DELAY seconds until the retry button can be seen. The retry button being found raises RetryFound, so the normal
     end-of-mission handling takes over."""
     state["rescuing"] = True
     if not debug:
@@ -1439,12 +1478,16 @@ def rescue_clicks(debug=False):
         notify_rescue_async(False, stats["missions"])  # Discord: stuck, trying to eliminate
     cx = _monitor["left"] + _monitor["width"] // 2
     cy = _monitor["top"] + _monitor["height"] // 2
-    log(f"Mission is taking longer than {MISSION_TIMEOUT:g}s - looking at the ground, then "
-        "clicking the middle of the screen until retry shows up")
-    show("Stuck mission", "Looking at the ground, then clicking the middle of the screen")
+    cx, cy = failsafe_click_point(cx, cy)
+    where = "the picked spot" if (cx, cy) != (
+        _monitor["left"] + _monitor["width"] // 2,
+        _monitor["top"] + _monitor["height"] // 2) else "the middle of the screen"
+    log(f"Mission is taking longer than {mission_timeout():g}s - ejecting, looking at the ground, "
+        f"then clicking {where} ({cx}, {cy}) until retry shows up")
+    show("Stuck mission", f"Ejecting, looking at the ground, then clicking {where}")
 
     def click_phase():
-        """Click the middle every RESCUE_CLICK_DELAY seconds until retry shows up."""
+        """Click every RESCUE_CLICK_DELAY seconds until retry shows up."""
         while True:
             tick(scan_retry=False)                      # stop / pause
             loop_start = time.time()
@@ -1456,28 +1499,22 @@ def rescue_clicks(debug=False):
                 time.sleep(0.05)
 
     try:
-        # still shifted? (the shifted ability 2 icon is on screen): spam ability 2, then wait
         if debug:
             log("DEBUG F3+K: running the rescue now")
-        if _shifted_icon is None:
-            log(f"Rescue: {SHIFTED_ICON_FILE} not found - can't tell if the player is still shifted")
-        elif still_shifted():
-            log("Rescue: shifted ability 2 icon seen - still shifted")
-            show("Stuck mission", f"Still shifted - spamming ability 2 for {STILL_SHIFTED_SPAM_TIME:g}s")
-            log(f"Rescue: spamming ability 2 for {STILL_SHIFTED_SPAM_TIME:g}s, the {STILL_SHIFTED_WAIT:g}s "
-                f"wait starts {STILL_SHIFTED_WAIT_START:g}s after the spam started")
-            spam_start = time.time()
-            wait_end = spam_start + STILL_SHIFTED_WAIT_START + STILL_SHIFTED_WAIT
-            spam_key_for(KEY_ABILITY_1ST, STILL_SHIFTED_SPAM_TIME, STILL_SHIFTED_SPAM_INTERVAL,
-                         "ability 2 (shifted)")
-            while True:     # the rest of the wait (it started during the spam)
-                remaining = wait_end - time.time()
-                if remaining <= 0:
-                    break
-                show("Stuck mission", f"Waiting {remaining:.0f}s before looking down")
-                wait(min(0.5, remaining))
-        else:
-            log("Rescue: shifted ability 2 icon not seen - not shifted")
+        # always use ability 2 (ejects the player if shifted), then wait before looking down
+        show("Stuck mission", f"Spamming ability 2 for {STILL_SHIFTED_SPAM_TIME:g}s")
+        log(f"Rescue: spamming ability 2 for {STILL_SHIFTED_SPAM_TIME:g}s, the {STILL_SHIFTED_WAIT:g}s "
+            f"wait starts {STILL_SHIFTED_WAIT_START:g}s after the spam started")
+        spam_start = time.time()
+        wait_end = spam_start + STILL_SHIFTED_WAIT_START + STILL_SHIFTED_WAIT
+        spam_key_for(KEY_ABILITY_1ST, STILL_SHIFTED_SPAM_TIME, STILL_SHIFTED_SPAM_INTERVAL,
+                     "ability 2")
+        while True:     # the rest of the wait (it started during the spam)
+            remaining = wait_end - time.time()
+            if remaining <= 0:
+                break
+            show("Stuck mission", f"Waiting {remaining:.0f}s before looking down")
+            wait(min(0.5, remaining))
         look_down(lambda: tick(scan_retry=False))
         click_phase()
     finally:
@@ -1498,7 +1535,7 @@ def tick(scan_retry=True):
             state["debug_rescue"] = False
             rescue_clicks(debug=True)
         elif (not state["rescuing"] and t0 is not None
-                and time.time() - t0 > MISSION_TIMEOUT):
+                and time.time() - t0 > mission_timeout()):
             rescue_clicks()
         if time.time() - _last_scan >= SCAN_INTERVAL:
             scan_for_retry()
@@ -1544,15 +1581,6 @@ def click_at(x, y, tw, th):
     x += random.randint(-tw // 6, tw // 6)
     y += random.randint(-th // 6, th // 6)
     pydirectinput.moveTo(x, y)
-    time.sleep(random.uniform(0.08, 0.2))
-    pydirectinput.moveRel(1, 0)
-    time.sleep(0.05)
-    pydirectinput.click()
-
-
-def click_exact(x, y):
-    """Click one exact screen position (Fix retry: the position the user picked)."""
-    pydirectinput.moveTo(int(x), int(y))
     time.sleep(random.uniform(0.08, 0.2))
     pydirectinput.moveRel(1, 0)
     time.sleep(0.05)
@@ -1801,7 +1829,7 @@ def shift_sequence():
     hold_key = KEY_STRAFE_D if move == "Right" else KEY_STRAFE if move == "Left" else None
     hold_txt = f"holding {hold_key.upper()}" if hold_key else "standing still"
     log(f"Ability 5 over and over + {hold_txt} (until the mission ends "
-        f"or the mission passes {MISSION_TIMEOUT:g}s)")
+        f"or the mission passes {mission_timeout():g}s)")
     presses = 0
     next_5 = time.time()
     d_held = False
@@ -1809,12 +1837,12 @@ def shift_sequence():
         while True:
             now = time.time()
             t0 = state["mission_t0"]
-            timed_out = t0 is not None and now - t0 > MISSION_TIMEOUT
+            timed_out = t0 is not None and now - t0 > mission_timeout()
             if timed_out:
                 if d_held:                       # mission too long: let go of the key
                     pydirectinput.keyUp(hold_key)
                     d_held = False
-                    log(f"Mission over {MISSION_TIMEOUT:g}s - released {hold_key.upper()}")
+                    log(f"Mission over {mission_timeout():g}s - released {hold_key.upper()}")
             elif hold_key and not d_held:
                 pydirectinput.keyDown(hold_key)   # hold A / D (the end of the mission ends this)
                 d_held = True
@@ -1833,7 +1861,7 @@ def shift_sequence():
 # ---------------------------- the routine -------------------------------
 def run_mission():
     state["manual_start"] = False   # a mission is running now: forget any leftover F8 press
-    state["mission_t0"] = time.time()   # for the stuck-mission rescue (MISSION_TIMEOUT)
+    state["mission_t0"] = time.time()   # for the stuck-mission rescue (failsafe time)
     state["rescued"] = False
     stats["missions"] += 1
     push_stats()
@@ -1906,10 +1934,37 @@ def run_mission():
 
 
 # --------------------------- macro thread -------------------------------
+def _screen_scale():
+    """real screen height / BASE_HEIGHT, worked out before the pictures are loaded (the user's own
+    pictures have to be scaled to 1080p size when they are loaded)."""
+    if FORCE_SCALE:
+        return FORCE_SCALE
+    try:
+        with mss.mss() as tmp:
+            return tmp.monitors[MONITOR_INDEX]["height"] / BASE_HEIGHT
+    except Exception:  # noqa: BLE001
+        return 1.0
+
+
+def _log_overrides():
+    """Tell the user which of their own pictures from asset_override are in use."""
+    folder = ensure_override_dir()
+    mine = []
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+                mine.append(os.path.relpath(os.path.join(root, f), folder).replace("\\", "/"))
+    if mine:
+        log(f"asset_override: using your own picture(s) instead of the built-in ones: "
+            f"{', '.join(sorted(mine))}")
+
+
 def macro_main():
     global _sct, _monitor, _scale, _retry_template, _start_template, _grab_template
-    global _shiki_ability4_icon, _shifted_icon
+    global _shiki_ability4_icon
     try:
+        _scale = _screen_scale()     # the user's own pictures (asset_override) are scaled with it
+        _log_overrides()
         _retry_template = load_quality_templates(TEMPLATE_FILE)
         load_alt_retry()
         _start_template = load_quality_templates(START_TEMPLATE_FILE)
@@ -1918,11 +1973,6 @@ def macro_main():
         except FileNotFoundError:
             _shiki_ability4_icon = None
             log(f"Shiki: {SHIKI_ABILITY4_FILE} not found - buying time uses the {ABILITY4_COOLDOWN:.0f}s timer")
-        try:
-            _shifted_icon = load_quality_templates(SHIFTED_ICON_FILE)
-        except FileNotFoundError:
-            _shifted_icon = None
-            log(f"Rescue: {SHIFTED_ICON_FILE} not found - the still-shifted check is skipped")
         _grab_template = None
         if GRAB_ENABLED:
             try:
@@ -1938,12 +1988,8 @@ def macro_main():
         _loot_templates.clear()
         if LOOT_ENABLED:
             for quality, folder in (("normal", ""), ("low", LOW_FOLDER)):
-                if settings["low_quality"] and quality == "normal":
-                    continue        # low quality mode: only the low quality pictures
                 _loot_templates[quality] = {}
                 for kind, filename in LOOT_FILES.items():
-                    if settings["low_quality"] and kind == "body":
-                        continue    # low quality mode: body fragments are not searched at all
                     try:
                         _loot_templates[quality][kind] = load_template(
                             os.path.join(folder, filename))
@@ -1953,19 +1999,6 @@ def macro_main():
                                 for f in LOOT_FILES.values()):
                             tag = "" if quality == "normal" else " (low quality)"
                             log(f"Loot{tag}: {filename} not found - skipping {kind}")
-        if settings["low_quality"]:
-            log("Low quality mode: using only the pictures from the low quality fix folder "
-                "(body fragments are not checked)")
-        if settings["fix_retry"]:
-            if not settings["fix_retry_pos"]:
-                log("Fix retry is on but no click position is set (Settings > Configs) - "
-                    "using the normal retry detection")
-            elif not _result_templates:
-                log("Fix retry needs result_completed.png / result_failed.png - "
-                    "using the normal retry detection")
-            else:
-                log(f"Fix retry on: the retry click goes to {tuple(settings['fix_retry_pos'])} "
-                    f"{FIX_RETRY_WAIT:g}s after COMPLETED / FAILED shows up")
         log("Started. Click into Roblox; the routine starts when the mission begins.")
 
         # Initialise mss manually so _reinit_mss() can replace it while running.
@@ -1999,39 +2032,18 @@ def macro_main():
                     ev.put(("mission_ended",))
                     set_status("retrying")
                     set_step(-1)
-                    fix = r.quality == "fix"
-                    if fix:
-                        log(f"Mission ended: {r.kind.upper()} text seen (Fix retry, score {score:.2f})")
-                    else:
-                        log(f"Retry found ({r.quality} quality, score {score:.2f})")
+                    log(f"Retry found ({r.quality} quality, score {score:.2f})")
                     if was_rescued:
                         log("Stuck mission is over - player eliminated")
                         notify_rescue_async(True, stats["missions"],
                                             time.time() - mission_t0 if mission_t0 else None)
-                    if fix:      # no retry button was seen: use the graphics setting for the loot
-                        low = bool(settings["low_quality"])
-                        q = "low" if low else "normal"
-                    else:
-                        low = r.quality == "low"
-                        q = r.quality
+                    low = r.quality == "low"
+                    q = r.quality
                     loot_found, result = {}, None
                     loot_on = bool(_loot_templates.get(q))   # loot icons of THIS quality
                     # normal quality: result + loot are read before the click.
                     # low quality: only the result now, the loot after the click (see below)
-                    if fix:
-                        # Fix retry: wait FIX_RETRY_WAIT seconds (result + loot are read meanwhile)
-                        show("Mission ended", f"{r.kind.capitalize()} - clicking retry in "
-                                              f"{FIX_RETRY_WAIT:g}s")
-                        log(f"Waiting {FIX_RETRY_WAIT:g}s before clicking the retry position")
-                        loot_found, result = scan_end_screen(
-                            q, want_loot=loot_on and not low, want_result=True,
-                            scan_time=FIX_RETRY_WAIT)
-                        if result is None:
-                            result = (r.kind, r.match)      # seen when it was detected
-                        record_result(result)
-                        if loot_on and not low:
-                            record_loot(loot_found)
-                    elif _result_templates or (loot_on and not low):
+                    if _result_templates or (loot_on and not low):
                         show("Retry found", "Checking the result and loot..."
                              if not low else "Checking the result...")
                         loot_found, result = scan_end_screen(
@@ -2042,15 +2054,10 @@ def macro_main():
                             record_loot(loot_found)
                     if not low:
                         notify_mission_async(result, loot_found)   # Discord stats embed (if on)
-                    show("Retry found" if not fix else "Mission ended", "Clicking...")
-                    if fix:
-                        px, py = settings["fix_retry_pos"]
-                        log(f"Clicking retry at the saved position ({px}, {py})")
-                        click_exact(px, py)
-                    else:
-                        log("Clicking retry")
-                        save_click_debug(cx, cy, tw, th)
-                        click_at(abs_x, abs_y, int(tw * _scale), int(th * _scale))
+                    show("Retry found", "Clicking...")
+                    log("Clicking retry")
+                    save_click_debug(cx, cy, tw, th)
+                    click_at(abs_x, abs_y, int(tw * _scale), int(th * _scale))
                     clicked_at = time.time()
                     stats["retries"] += 1
                     push_stats()
@@ -3314,8 +3321,6 @@ class SettingsWindow(tk.Toplevel):
         self.withdraw()     # build everything hidden, then show it once - no flicker
         self.app = app
         self.capturing = None       # bind id waiting for a key press
-        self.pos_capturing = False  # waiting for the click that sets the Fix retry position
-        self.pos_wait_release = False
         self.capture_hook = None
         self.save_job = None
         self.say_job = None
@@ -3347,6 +3352,8 @@ class SettingsWindow(tk.Toplevel):
         """(Re)build every widget - on open, and again when the theme changes."""
         self.cancel_capture()
         for child in self.winfo_children():
+            if isinstance(child, AssetOverrideWindow):
+                continue
             child.destroy()
         self.key_buttons, self.pages, self.tab_widgets = {}, {}, {}
         self.configure(bg=App.BG)
@@ -3658,16 +3665,7 @@ class SettingsWindow(tk.Toplevel):
         tk.Label(c, text="Yeager not recommended", font=(App.FONT, 8),
                  fg=App.SUB, bg=App.CARD, anchor="w").pack(fill="x", pady=(8, 0))
 
-        # section 2: graphics
-        self.v_lowq = tk.BooleanVar(value=settings["low_quality"])
-        g = self.card(page, "GRAPHICS",
-                      "Turn this on if you play on low graphics. It uses ONLY the pictures in "
-                      "image/low quality fix to find the retry button, the loot and the "
-                      "mission start. Body fragments are NOT checked in this mode (no fix "
-                      "for the false detections yet).")
-        self.check(g, "Low quality mode", self.v_lowq, self.on_lowq_toggle)
-
-        # section 3: movement while shifted (step 9)
+        # section 2: movement while shifted (step 9)
         self.v_move_shifted = tk.StringVar(value=settings["move_shifted"])
         ms = self.card(page, "MOVE WHILE SHIFTED",
                        "The direction you move in after shifting (while spamming ability 5). "
@@ -3678,187 +3676,148 @@ class SettingsWindow(tk.Toplevel):
                                               self.on_move_shifted_pick)
         self.move_shifted_dd.pack(fill="x")
 
-        # section 4: fix retry
-        self.v_fix = tk.BooleanVar(value=settings["fix_retry"])
-        f = self.card(page, "FIX RETRY",
-                      "Turn this on if the retry button is not being detected. The macro then "
-                      "watches for the COMPLETED / FAILED text instead, waits "
-                      f"{FIX_RETRY_WAIT:g} seconds and clicks the position you set below.")
-        self.check(f, "Fix retry", self.v_fix, self.on_fix_toggle)
-        pos_row = tk.Frame(f, bg=App.CARD)
-        pos_row.pack(fill="x", pady=(6, 0))
-        self.fix_pos_title = tk.Label(pos_row, text="Retry click position", font=(App.FONT, 10),
-                                      bg=App.CARD, anchor="w")
-        self.fix_pos_title.pack(side="left")
-        self.fix_pos_btn = tk.Label(pos_row, text="Set position", font=(App.FONT, 9, "bold"),
-                                    padx=12, pady=5)
-        self.fix_pos_btn.pack(side="right")
-        self.fix_pos_btn.bind("<Button-1>", lambda _e: self.start_pos_capture())
-        self.fix_pos_btn.bind("<Enter>", lambda _e: self.fix_pos_hover(True))
-        self.fix_pos_btn.bind("<Leave>", lambda _e: self.fix_pos_hover(False))
-        self.fix_pos_value = tk.Label(f, text="", font=(App.FONT, 9), bg=App.CARD, anchor="w")
-        self.fix_pos_value.pack(fill="x", pady=(4, 0))
-        self.refresh_fix_pos()
+        # section 3: failsafe (stuck-mission rescue)
+        fs = settings["failsafe"]
+        self.v_fs_min = tk.StringVar(value=str(fs["minutes"]))
+        self.v_fs_sec = tk.StringVar(value=str(fs["seconds"]))
+        self.v_fs_x = tk.StringVar(value="" if fs["click_x"] is None else str(fs["click_x"]))
+        self.v_fs_y = tk.StringVar(value="" if fs["click_y"] is None else str(fs["click_y"]))
+        f = self.card(page, "FAILSAFE",
+                      "If a mission lasts longer than the time below, the macro spams ability 2, "
+                      "waits 15s, looks down and clicks until the retry button shows up.")
 
-    # ----- fix retry helpers -----
-    def fix_pos_hover(self, on):
-        if self.v_fix.get() and not self.pos_capturing:
-            self.fix_pos_btn.configure(bg=App.ACCENT_BG_HOVER if on else App.ACCENT_BG)
+        def spin(parent, var, hi, unit):
+            sp = tk.Spinbox(parent, from_=0, to=hi, width=4, textvariable=var,
+                            command=self.save_soon, font=(App.FONT, 10), justify="center",
+                            bg=App.LOGBG, fg=App.TEXT, insertbackground=App.TEXT,
+                            buttonbackground=App.FIELD, relief="flat", highlightthickness=1,
+                            highlightbackground=App.BORDER, highlightcolor=App.ACCENT)
+            sp.pack(side="left", ipady=3)
+            tk.Label(parent, text=unit, font=(App.FONT, 10), fg=App.TEXT,
+                     bg=App.CARD).pack(side="left", padx=(6, 14))
 
-    def refresh_fix_pos(self):
-        """Colours / texts of the position row: greyed out while Fix retry is off."""
-        on = bool(self.v_fix.get())
-        pos = settings["fix_retry_pos"]
-        text = f"X: {pos[0]}   Y: {pos[1]}" if pos else "Not set yet - press Set position, then click the retry button."
-        if self.pos_capturing:
-            text = "Now click the retry button (Esc to cancel)..."
-        self.fix_pos_title.configure(fg=App.TEXT if on else App.DIS_TEXT)
-        self.fix_pos_value.configure(text=text, fg=App.SUB if on else App.DIS_TEXT)
-        if on:
-            self.fix_pos_btn.configure(fg=App.ACCENT_TEXT, bg=App.ACCENT_BG, cursor="hand2",
-                                       text="Click now..." if self.pos_capturing else "Set position")
-        else:
-            self.fix_pos_btn.configure(fg=App.DIS_TEXT, bg=App.DIS_FILL, cursor="arrow",
-                                       text="Set position")
+        row = tk.Frame(f, bg=App.CARD)
+        row.pack(fill="x", pady=(0, 2))
+        tk.Label(row, text="Wait time", font=(App.FONT, 10), fg=App.TEXT,
+                 bg=App.CARD).pack(side="left", padx=(0, 10))
+        spin(row, self.v_fs_min, MAX_FAILSAFE_MINUTES, "min")
+        spin(row, self.v_fs_sec, 59, "s")
+        self.hint(f, f"How long a mission can run before the failsafe triggers "
+                     f"(default 2 min 0 s, minimum {MIN_FAILSAFE_SECONDS}s).")
 
-    def on_fix_toggle(self):
-        if running():
-            self.v_fix.set(not self.v_fix.get())      # put the switch back
-            self.say("Stop the macro before changing Fix retry.", error=True)
-            return
-        settings["fix_retry"] = bool(self.v_fix.get())
-        if not settings["fix_retry"]:
-            self.cancel_pos_capture()
-        save_stats()
-        self.refresh_fix_pos()
-        if settings["fix_retry"] and not settings["fix_retry_pos"]:
-            self.say("Fix retry on - now set the retry click position.", good=True)
-        else:
-            self.say("Fix retry " + ("on" if settings["fix_retry"] else "off"), good=True)
+        row = tk.Frame(f, bg=App.CARD)
+        row.pack(fill="x", pady=(10, 2))
+        tk.Label(row, text="Click at", font=(App.FONT, 10), fg=App.TEXT,
+                 bg=App.CARD).pack(side="left", padx=(0, 10))
+        for label, var in (("X", self.v_fs_x), ("Y", self.v_fs_y)):
+            tk.Label(row, text=label, font=(App.FONT, 9), fg=App.SUB,
+                     bg=App.CARD).pack(side="left", padx=(0, 4))
+            e = tk.Entry(row, textvariable=var, width=6, font=(App.FONT, 10), justify="center",
+                         bg=App.LOGBG, fg=App.TEXT, insertbackground=App.TEXT, relief="flat",
+                         highlightthickness=1, highlightbackground=App.BORDER,
+                         highlightcolor=App.ACCENT)
+            e.pack(side="left", ipady=3, padx=(0, 10))
+        row2 = tk.Frame(f, bg=App.CARD)
+        row2.pack(fill="x", pady=(6, 0))
+        self.flat_button(row2, "Pick spot", self.pick_failsafe_spot).pack(side="left")
+        reset = tk.Label(row2, text="Use screen center", font=(App.FONT, 9), fg=App.SUB,
+                         bg=App.CARD, cursor="hand2")
+        reset.pack(side="left", padx=(14, 0))
+        reset.bind("<Button-1>", lambda _e: self.clear_failsafe_spot())
+        reset.bind("<Enter>", lambda _e: reset.configure(fg=App.TEXT))
+        reset.bind("<Leave>", lambda _e: reset.configure(fg=App.SUB))
+        self.hint(f, "Where the failsafe clicks. Empty = the middle of the screen; a picked "
+                     "coordinate overrides it.")
+        for var in (self.v_fs_min, self.v_fs_sec, self.v_fs_x, self.v_fs_y):
+            var.trace_add("write", lambda *_: self.save_soon())
 
-    def start_pos_capture(self):
-        """Like OP Auto Clicker: press the button, then click anywhere - that spot is saved."""
-        if not self.v_fix.get() or self.pos_capturing:
-            return
-        self.pos_capturing = True
-        self.pos_wait_release = True      # let go of the mouse button that pressed "Set position"
-        self.refresh_fix_pos()
-        self.say("Click the retry button now (Esc to cancel).")
-        set_move_cursor()                 # move cursor while picking ...
-        self.make_pos_tip()               # ... with the live coordinates at its bottom right
-        self.poll_pos_capture()
+        # section 4: asset override
+        a = self.card(page, "ASSET OVERRIDE",
+                      "Detection not working? Replace the macro's pictures with your own screenshots.")
+        self.flat_button(a, "Open", self.open_asset_window).pack(anchor="w")
 
-    def make_pos_tip(self):
-        """Small click-through label that follows the cursor and shows its coordinates."""
-        self.destroy_pos_tip()
-        # screenshot-style tint over every screen (the click is taken by it, so it can't press
-        # anything in the game while the position is being picked)
+    def open_asset_window(self):
+        win = getattr(self, "asset_win", None)
         try:
-            gm = ctypes.windll.user32.GetSystemMetrics
-            vx, vy, vw, vh = gm(76), gm(77), gm(78), gm(79)      # the whole virtual screen
-            shade = tk.Toplevel(self)
-            shade.overrideredirect(True)
-            shade.configure(bg="#000000", cursor="fleur")
-            shade.attributes("-topmost", True)
-            shade.attributes("-alpha", POS_TINT_ALPHA)
-            shade.geometry(f"{vw}x{vh}+{vx}+{vy}")
-            self.pos_shade = shade
-        except (tk.TclError, OSError):
-            self.pos_shade = None
-        tip = tk.Toplevel(self)
+            if win is not None and win.winfo_exists():
+                win.deiconify()
+                win.lift()
+                win.focus_force()
+                return
+        except tk.TclError:
+            pass
+        self.asset_win = AssetOverrideWindow(self)
+
+    def pick_failsafe_spot(self):
+        """Tint the screen, show the live coordinates next to the cursor, and store the spot of
+        the next click as the failsafe click."""
+        if getattr(self, "_picker", None) is not None:
+            return
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        pk = tk.Toplevel(self)
+        self._picker = pk
+        pk.overrideredirect(True)
+        pk.attributes("-topmost", True)
+        pk.attributes("-alpha", 0.55)                    # the tint
+        pk.configure(bg="black", cursor="fleur")         # "fleur" = the four-arrow move cursor
+        pk.geometry(f"{sw}x{sh}+0+0")
+        tk.Label(pk, text="Click where the failsafe should click   (Esc to cancel)",
+                 font=(App.FONT, 16, "bold"), fg="white", bg="black",
+                 cursor="fleur").pack(pady=40)
+
+        # the coordinates live in their own opaque little window that follows the cursor
+        tip = tk.Toplevel(pk)
         tip.overrideredirect(True)
         tip.attributes("-topmost", True)
-        lbl = tk.Label(tip, text="", font=("Consolas", 10, "bold"), fg="#ffffff", bg="#111827",
-                       padx=6, pady=2, bd=1, relief="solid")
+        tip.configure(bg="#111111")
+        lbl = tk.Label(tip, text="", font=("Consolas", 11, "bold"), fg="white", bg="#111111",
+                       padx=8, pady=3)
         lbl.pack()
-        tip.update_idletasks()
-        try:     # click-through + never takes focus
-            hwnd = ctypes.windll.user32.GetAncestor(tip.winfo_id(), 2)
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-            ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x20 | 0x80 | 0x08000000)
-        except Exception:  # noqa: BLE001
-            pass
-        self.pos_tip, self.pos_tip_label = tip, lbl
 
-    def update_pos_tip(self, x, y):
-        tip = getattr(self, "pos_tip", None)
-        if tip is None:
-            return
-        try:
-            self.pos_tip_label.configure(text=f"{x}, {y}")
+        def follow(x, y):
+            lbl.configure(text=f"{x}, {y}")
             tip.update_idletasks()
             w, h = tip.winfo_reqwidth(), tip.winfo_reqheight()
-            px, py = x + 18, y + 22                        # bottom right of the cursor
-            if px + w > tip.winfo_screenwidth():          # near the screen edge: flip to the other side
-                px = x - w - 8
-            if py + h > tip.winfo_screenheight():
-                py = y - h - 8
-            tip.geometry(f"+{px}+{py}")
-            tip.lift()
-        except tk.TclError:
-            self.pos_tip = None
+            tx, ty = x + 18, y + 18                      # bottom right of the cursor
+            if tx + w > sw:                              # flip near the screen edges
+                tx = x - 18 - w
+            if ty + h > sh:
+                ty = y - 18 - h
+            tip.geometry(f"+{tx}+{ty}")
 
-    def destroy_pos_tip(self):
-        for name in ("pos_tip", "pos_shade"):      # the coordinate label and the screen tint
-            win = getattr(self, name, None)
-            setattr(self, name, None)
-            if win is not None:
-                try:
-                    win.destroy()
-                except tk.TclError:
-                    pass
-
-    def cancel_pos_capture(self):
-        self.destroy_pos_tip()
-        restore_cursors()
-        if self.pos_capturing:
-            self.pos_capturing = False
+        def close():
+            self._picker = None
             try:
-                self.refresh_fix_pos()
+                tip.destroy()
+                pk.destroy()
             except tk.TclError:
                 pass
+            self.lift()
 
-    def poll_pos_capture(self):
-        if not self.pos_capturing:
-            return
-        user32 = ctypes.windll.user32
-        if user32.GetAsyncKeyState(0x1B) & 0x8000:           # Esc
-            self.cancel_pos_capture()
-            self.say("Cancelled.")
-            return
-        down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)  # left mouse button
+        def done(event):
+            x, y = int(event.x_root), int(event.y_root)
+            self.v_fs_x.set(str(x))
+            self.v_fs_y.set(str(y))
+            close()
+            self.commit()
+            self.say(f"Failsafe click spot set to {x}, {y}", good=True)
 
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-        pt = POINT()
-        user32.GetCursorPos(ctypes.byref(pt))
-        self.update_pos_tip(int(pt.x), int(pt.y))             # live coordinates next to the cursor
-        if self.pos_wait_release:
-            if not down:
-                self.pos_wait_release = False
-        elif down:
-            settings["fix_retry_pos"] = [int(pt.x), int(pt.y)]
-            self.pos_capturing = False
-            self.destroy_pos_tip()
-            restore_cursors()
-            save_stats()
-            self.refresh_fix_pos()
-            self.say(f"Saved position ({pt.x}, {pt.y}).", good=True)
-            return
-        self.after(15, self.poll_pos_capture)
+        pk.bind("<Motion>", lambda e: follow(int(e.x_root), int(e.y_root)))
+        pk.bind("<Button-1>", done)
+        pk.bind("<Escape>", lambda _e: close())
+        pk.bind("<Button-3>", lambda _e: close())
+        follow(pk.winfo_pointerx(), pk.winfo_pointery())
+        pk.focus_force()
+
+    def clear_failsafe_spot(self):
+        self.v_fs_x.set("")
+        self.v_fs_y.set("")
+        self.commit()
+        self.say("Failsafe will click the middle of the screen", good=True)
 
     def on_move_shifted_pick(self, key):
         self.v_move_shifted.set(key)
         self.commit()
-
-    def on_lowq_toggle(self):
-        if running():
-            self.v_lowq.set(not self.v_lowq.get())      # put the switch back
-            self.say("Stop the macro before changing low quality mode.", error=True)
-            return
-        settings["low_quality"] = bool(self.v_lowq.get())
-        save_stats()
-        self.say("Low quality mode " + ("on" if settings["low_quality"] else "off"), good=True)
 
     def on_family_pick(self, key):
         self.v_family.set(key)
@@ -3912,6 +3871,22 @@ class SettingsWindow(tk.Toplevel):
         settings["family"] = fam if fam in FAMILIES else DEFAULT_FAMILY
         ms = self.v_move_shifted.get()
         settings["move_shifted"] = ms if ms in MOVE_SHIFTED_OPTIONS else DEFAULT_MOVE_SHIFTED
+        fs = settings["failsafe"]
+        try:
+            fs["minutes"] = min(MAX_FAILSAFE_MINUTES, max(0, int(self.v_fs_min.get())))
+        except ValueError:
+            pass                            # being typed / empty: keep the old value
+        try:
+            fs["seconds"] = min(59, max(0, int(self.v_fs_sec.get())))
+        except ValueError:
+            pass
+        try:
+            fx, fy = int(self.v_fs_x.get()), int(self.v_fs_y.get())
+            if fx >= 0 and fy >= 0:
+                fs["click_x"], fs["click_y"] = fx, fy
+        except ValueError:
+            if not self.v_fs_x.get().strip() and not self.v_fs_y.get().strip():
+                fs["click_x"] = fs["click_y"] = None     # both empty = screen center
         save_stats()
         # gentle warnings (it still saves what was typed)
         bad_url = bool(wh["url"]) and not webhook_url()
@@ -3934,52 +3909,276 @@ class SettingsWindow(tk.Toplevel):
 
     def close(self):
         self.cancel_capture()
-        self.cancel_pos_capture()
         self.commit()
         self.app.settings_win = None
         self.destroy()
 
 
-# ---- "Set position" (Fix retry): move cursor everywhere on screen while picking ----
-_CURSOR_OCR_IDS = (32512, 32513, 32515, 32649)   # arrow, text, cross, hand: all become the move cursor
-_cursor_replaced = False
-POS_TINT_ALPHA = 0.65     # how dark the screen gets while picking the position (0 = clear, 1 = black)
+ASSET_LIST = (
+    # (label, file name relative to the image folder) - normal quality pictures only
+    ("Retry button text", TEMPLATE_FILE),
+    ("Retry button (whole)", ALT_RETRY_FILE),
+    ("Mission start (ability 2 icon)", START_TEMPLATE_FILE),
+    ("Shiki ability 4 icon", SHIKI_ABILITY4_FILE),
+    ("Grabbed text", GRAB_FILE),
+    ("Result: Completed", RESULT_FILES["completed"]),
+    ("Result: Failed", RESULT_FILES["failed"]),
+    ("Loot: Scroll", LOOT_FILES["scroll"]),
+    ("Loot: Body fragment", LOOT_FILES["body"]),
+    ("Loot: Defence fragment", LOOT_FILES["defence"]),
+    ("Loot: Offence fragment", LOOT_FILES["offence"]),
+    ("Loot: Support fragment", LOOT_FILES["support"]),
+)
 
 
-def set_move_cursor():
-    """Turn the system cursors into the Windows "move" cursor (four arrows), also over other windows."""
-    global _cursor_replaced
-    if _cursor_replaced:
-        return
+def clipboard_image():
+    """The screenshot currently on the clipboard (Win+Shift+S, Print Screen, a copied picture) as
+    a BGR array, or None. Windows only, no extra package needed."""
+    if sys.platform != "win32":
+        return None
+    import ctypes.wintypes as wt
+    u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+    u32.OpenClipboard.argtypes = [wt.HWND]
+    u32.GetClipboardData.argtypes = [wt.UINT]
+    u32.GetClipboardData.restype = wt.HANDLE
+    k32.GlobalLock.argtypes = [wt.HANDLE]
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalUnlock.argtypes = [wt.HANDLE]
+    k32.GlobalSize.argtypes = [wt.HANDLE]
+    k32.GlobalSize.restype = ctypes.c_size_t
+    CF_DIB = 8
+    opened = False
+    for _ in range(10):                       # the clipboard may be busy for a moment
+        if u32.OpenClipboard(None):
+            opened = True
+            break
+        time.sleep(0.05)
+    if not opened:
+        return None
+    data = None
     try:
-        u = ctypes.windll.user32
-        u.LoadCursorW.restype = ctypes.c_void_p
-        u.LoadCursorW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        u.CopyIcon.restype = ctypes.c_void_p
-        u.CopyIcon.argtypes = [ctypes.c_void_p]
-        u.SetSystemCursor.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        for target in _CURSOR_OCR_IDS:
-            handle = u.CopyIcon(u.LoadCursorW(None, 32646))     # IDC_SIZEALL
-            if handle:
-                u.SetSystemCursor(handle, target)    # (Windows owns / frees the copy)
-        _cursor_replaced = True
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def restore_cursors():
-    """Give the normal system cursors back."""
-    global _cursor_replaced
-    if not _cursor_replaced:
-        return
-    _cursor_replaced = False
+        handle = u32.GetClipboardData(CF_DIB)
+        if handle:
+            ptr = k32.GlobalLock(handle)
+            if ptr:
+                try:
+                    data = ctypes.string_at(ptr, k32.GlobalSize(handle))
+                finally:
+                    k32.GlobalUnlock(handle)
+    finally:
+        u32.CloseClipboard()
+    if not data or len(data) < 40:
+        return None
     try:
-        ctypes.windll.user32.SystemParametersInfoW(0x0057, 0, None, 0)   # SPI_SETCURSORS
+        import struct
+        hdr, = struct.unpack_from("<I", data, 0)
+        bpp, = struct.unpack_from("<H", data, 14)
+        comp, = struct.unpack_from("<I", data, 16)
+        used, = struct.unpack_from("<I", data, 32)
+        masks = 12 if (hdr == 40 and comp == 3) else 16 if (hdr == 40 and comp == 6) else 0
+        palette = used * 4 if used else ((1 << bpp) * 4 if bpp <= 8 else 0)
+        offset = 14 + hdr + masks + palette
+        bmp = b"BM" + struct.pack("<IHHI", 14 + len(data), 0, 0, offset) + data
+        return cv2.imdecode(np.frombuffer(bmp, dtype=np.uint8), cv2.IMREAD_COLOR)
     except Exception:  # noqa: BLE001
-        pass
+        return None
 
 
-atexit.register(restore_cursors)      # never leave the move cursor behind
+def save_override_image(img, filename):
+    """Write a picture (BGR array) into asset_override under the macro's file name, as a PNG."""
+    dest = os.path.join(ensure_override_dir(), filename)
+    try:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        ok, buf = cv2.imencode(".png", img)
+        if not ok:
+            return False
+        buf.tofile(dest)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def import_override_picture(src_path, filename):
+    """Copy a picture the user picked into asset_override under the macro's file name (always a
+    PNG, so jpg / bmp screenshots work too). Returns True when it worked."""
+    img = _read_image(src_path)
+    return img is not None and save_override_image(img, filename)
+
+
+def remove_override_picture(filename):
+    path = override_path(filename)
+    if not path:
+        return True
+    try:
+        os.remove(path)
+        return True
+    except OSError:
+        return False
+
+
+class AssetOverrideWindow(tk.Toplevel):
+    """Every picture the macro looks for, with a thumbnail and a Change button. A picture chosen
+    here is saved into asset_override with the right name, so the macro uses it instead of the
+    built-in one (see load_template)."""
+    THUMB_W, THUMB_H = 120, 44
+
+    def __init__(self, settings_win):
+        super().__init__(settings_win)
+        self.withdraw()
+        self.sw = settings_win
+        self.thumbs = []                  # keep the PhotoImages alive
+        self.title("ymir - assets")
+        try:
+            self.iconbitmap(asset_path(ICON_FILE))
+        except (tk.TclError, OSError):
+            pass
+        self.configure(bg=App.BG)
+        self.transient(settings_win)
+        self.attributes("-topmost", True)
+        self.minsize(480, 320)
+
+        # bottom bar first, so it always stays visible
+        bottom = tk.Frame(self, bg=App.BG)
+        bottom.pack(side="bottom", fill="x", padx=18, pady=(8, 14))
+        self.sw.flat_button(bottom, "Open folder", open_override_folder).pack(side="left")
+        self.note = tk.Label(bottom, text="", font=(App.FONT, 9), fg=App.SUB, bg=App.BG,
+                             anchor="w", justify="left", wraplength=250)
+        self.note.pack(side="left", padx=(12, 0), fill="x", expand=True)
+
+        tk.Label(self, text="Pictures the macro looks for", font=(App.FONT, 11, "bold"),
+                 fg=App.TEXT, bg=App.BG, anchor="w").pack(side="top", fill="x", padx=18, pady=(14, 0))
+        tk.Label(self, text="Change = pick a file.  Paste = use the screenshot on your clipboard.",
+                 font=(App.FONT, 9), fg=App.SUB, bg=App.BG,
+                 anchor="w").pack(side="top", fill="x", padx=18, pady=(0, 8))
+
+        wrap = tk.Frame(self, bg=App.BG)
+        wrap.pack(side="top", fill="both", expand=True, padx=(18, 8))
+        self.canvas = tk.Canvas(wrap, bg=App.BG, highlightthickness=0, bd=0)
+        self.scroll = ttk.Scrollbar(wrap, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.scroll.set)
+        self.scroll.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = tk.Frame(self.canvas, bg=App.BG)
+        self.inner_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>",
+                        lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>",
+                         lambda e: self.canvas.itemconfigure(self.inner_id, width=e.width))
+        self.bind("<MouseWheel>", self._wheel)
+
+        self.refresh()
+        self.update_idletasks()
+        x, y = settings_win.winfo_x() + 30, settings_win.winfo_y() + 30
+        self.geometry(f"560x560+{x}+{y}")
+        style_title_bar(self, App.BG)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _wheel(self, e):
+        self.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+    def _thumb(self, filename):
+        """(PhotoImage or None, is_custom). Shows the user's picture if there is one."""
+        mine = override_path(filename)
+        path = mine
+        if not path:
+            built_in = asset_path(filename)
+            path = built_in if os.path.isfile(built_in) else None
+        img = _read_image(path) if path else None
+        if img is None:
+            return None, bool(mine)
+        h, w = img.shape[:2]
+        k = min(self.THUMB_W / w, self.THUMB_H / h, 3.0)
+        img = cv2.resize(img, (max(1, int(w * k)), max(1, int(h * k))),
+                         interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
+        ok, buf = cv2.imencode(".png", img)
+        if not ok:
+            return None, bool(mine)
+        return tk.PhotoImage(data=base64.b64encode(buf.tobytes())), bool(mine)
+
+    def refresh(self):
+        top = self.canvas.yview()[0]
+        for child in self.inner.winfo_children():
+            child.destroy()
+        self.thumbs = []
+        for label, filename in ASSET_LIST:
+            self._row(label, filename)
+        self.update_idletasks()
+        self.canvas.yview_moveto(top)
+
+    def _row(self, label, filename):
+        photo, custom = self._thumb(filename)
+        row = tk.Frame(self.inner, bg=App.CARD, highlightbackground=App.BORDER,
+                       highlightthickness=App.CARD_BW)
+        row.pack(fill="x", pady=3)
+        box = tk.Frame(row, bg=App.LOGBG, width=self.THUMB_W + 8, height=self.THUMB_H + 8)
+        box.pack(side="left", padx=8, pady=8)
+        box.pack_propagate(False)
+        if photo is not None:
+            self.thumbs.append(photo)
+            tk.Label(box, image=photo, bg=App.LOGBG, bd=0).pack(expand=True)
+        else:
+            tk.Label(box, text="no picture", font=(App.FONT, 8), fg=App.SUB,
+                     bg=App.LOGBG).pack(expand=True)
+        info = tk.Frame(row, bg=App.CARD)
+        info.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(info, text=label, font=(App.FONT, 10), fg=App.TEXT, bg=App.CARD,
+                 anchor="w").pack(fill="x")
+        tk.Label(info, text="Your picture" if custom else "Built-in", font=(App.FONT, 8),
+                 fg=App.ACCENT if custom else App.SUB, bg=App.CARD, anchor="w").pack(fill="x")
+        btns = tk.Frame(row, bg=App.CARD)
+        btns.pack(side="right", padx=10)
+        top_btns = tk.Frame(btns, bg=App.CARD)
+        top_btns.pack()
+        self.sw.flat_button(top_btns, "Change",
+                            lambda f=filename, l=label: self.change(f, l)).pack(side="left")
+        self.sw.flat_button(top_btns, "Paste",
+                            lambda f=filename, l=label: self.paste(f, l)).pack(side="left",
+                                                                               padx=(4, 0))
+        if custom:
+            reset = tk.Label(btns, text="Reset", font=(App.FONT, 8), fg=App.SUB, bg=App.CARD,
+                             cursor="hand2")
+            reset.pack(pady=(4, 0))
+            reset.bind("<Button-1>", lambda _e, f=filename, l=label: self.reset(f, l))
+            reset.bind("<Enter>", lambda _e, w=reset: w.configure(fg=App.TEXT))
+            reset.bind("<Leave>", lambda _e, w=reset: w.configure(fg=App.SUB))
+        for w in (row, info, box):
+            w.bind("<MouseWheel>", self._wheel)
+
+    def change(self, filename, label):
+        # the dialog is owned by this (always-on-top) window, so it opens above every macro window
+        path = filedialog.askopenfilename(
+            parent=self, title=f"Pick your picture for: {label}",
+            filetypes=[("Pictures", "*.png *.jpg *.jpeg *.bmp"), ("All files", "*.*")])
+        self.lift()
+        if not path:
+            return
+        if import_override_picture(path, filename):
+            self.note.configure(text=f"{label}: your picture is saved.", fg="#34d399")
+            self.refresh()
+        else:
+            self.note.configure(text="Could not read that picture.", fg="#f87171")
+
+    def paste(self, filename, label):
+        """Use the screenshot on the clipboard (Win+Shift+S, then Paste)."""
+        img = clipboard_image()
+        if img is None:
+            self.note.configure(text="No screenshot on the clipboard. Take one first "
+                                     "(Win+Shift+S), then press Paste.", fg="#f87171")
+        elif save_override_image(img, filename):
+            self.note.configure(text=f"{label}: pasted from the clipboard.", fg="#34d399")
+            self.refresh()
+        else:
+            self.note.configure(text="Could not save the picture.", fg="#f87171")
+
+    def reset(self, filename, label):
+        if remove_override_picture(filename):
+            self.note.configure(text=f"{label}: back to the built-in picture.", fg="#34d399")
+            self.refresh()
+        else:
+            self.note.configure(text="Could not remove your picture.", fg="#f87171")
 
 
 def apply_theme(name):
@@ -4013,6 +4212,7 @@ def apply_theme(name):
 
 def main():
     load_stats()          # stats + settings (saved keybinds, webhook, family)
+    ensure_override_dir() # Documents\\Ymir Macro\\asset_override: users drop their own pictures here
     apply_settings()
     register_hotkeys()
     root = tk.Tk()
