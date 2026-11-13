@@ -27,7 +27,7 @@ import numpy as np
 import pydirectinput
 
 # ----------------------------- SETTINGS ---------------------------------
-VERSION = "v1.3.4"        # release version tag
+VERSION = "v1.3.5"        # release version tag
                           # (shown in the footer, next to "Always on top")
 
 # --- Update checker (footer > Updates) ---
@@ -125,6 +125,7 @@ LOOK_DOWN_PIXELS = 15       # pixels moved down per step (relative movement, wor
 
 # --- Saved stats (kept between runs; the Reset button in the window erases them) ---
 STATS_FILE = "aotr_stats.json"   # saved in Documents\Ymir Macro
+CONFIG_FILE = "config.json"      # same folder: ONLY the timings changed in Edit configs (the overrides)
 STATS_FOLDER = "Ymir Macro"      # folder created inside your Documents folder
 OVERRIDE_FOLDER = "asset_override"   # inside Documents\Ymir Macro: the user's own pictures win over image/
 IMAGE_FOLDER = "image"           # all images (templates, logo, icon) are loaded from this folder,
@@ -134,6 +135,8 @@ LOW_FOLDER = "low quality fix"   # inside the image folder: the low graphics loo
 
 # --- Mission routine timings ---
 AFTER_ABILITY_DELAY = 0.6        # pause after ability 3 / 4
+AFTER_STRAFE_DELAY = 0.3         # Shiki: pause after the strafe, before ability 3
+AFTER_STRAFE_DELAY_FAST = 0.0    # Universal / Blood Awakening: go straight to ability 3 / 5 after the strafe
 AFTER_ABILITY2_DELAY = 1.5       # pause after ability 2, before the dash sequence starts
 DOUBLE_TAP_GAP = (0.06, 0.12)    # seconds between the two presses of ONE dash/strafe
 STRAFE_DELAY = (0.15, 0.25)      # seconds between A strafes while buying time (~0.2)
@@ -181,7 +184,7 @@ SHIKI_ABILITY4_SPAM_TIME = 2.0       # spam ability 4 this long once the icon is
 SHIKI_ABILITY4_SPAM_INTERVAL = 0.1   # seconds between those ability 4 presses
 
 # --- Movement (every config): dashing copied from a recorded macro, Space spammed non-stop ---
-UNIVERSAL_DASH_TIME = 8.2         # seconds of spamming
+UNIVERSAL_DASH_TIME = 8.1         # seconds of spamming
 UNIVERSAL_DASH_HOLD = (0.065, 0.09)  # how long each Space press is held
 UNIVERSAL_DASH_PRESS_GAP = (0.05, 0.08)  # pause between two presses
 UNIVERSAL_ABILITY4_SPAM_TIME = 3.0      # Universal: spam ability 4 this long after looking down
@@ -207,6 +210,145 @@ FAMILY_BADGES = {
     "Universal":       ("U", "#facc15", "#1a1500"),   # yellow U
     "Blood Awakening": ("B", "#ef4444", "#ffffff"),   # red B
 }
+
+
+# --- Edit configs (Settings > Configs > Abilities > Edit configs) ---
+# Every timing of the routine can be changed there, per part: Movement (shared by all) and the three
+# ability configs. The constants above are the DEFAULTS; only values the user changed are saved
+# (settings["timings"]). field = (key, label, kind, default, low, high, group, hint)
+#   kind: "sec" = seconds | "range" = (min, max) seconds, a random value in between each time
+#         "pix" = whole pixels | "num" = plain number
+def _f(key, label, kind, default, lo, hi, group, hint=""):
+    return (key, label, kind, default, lo, hi, group, hint)
+
+
+def _shift_fields():
+    """The shifting sequence (ability 5 shift, wait, shifted ability 4, ability 5) - every config has its own copy."""
+    g = "Shift sequence"
+    return [
+        _f("shift_spam_time", "Ability 5 spam time", "sec", SHIFT_SPAM_TIME, 0, 60, g,
+           "How long ability 5 is spammed so the shift is used."),
+        _f("shift_spam_interval", "Ability 5 spam interval", "sec", SHIFT_SPAM_INTERVAL, 0.02, 5, g,
+           "Pause between those presses."),
+        _f("shift_spam_extra", "Extra spam inside the wait", "sec", SHIFT_SPAM_EXTRA, 0, 60, g,
+           "Ability 5 keeps being pressed quietly this long, inside the wait below."),
+        _f("shifted4_at", "Wait for the shift", "sec", SHIFTED4_SPAM_AT, 0, 120, g,
+           "Seconds after the ability 5 spam before the shifted ability 4 starts."),
+        _f("shifted4_time", "Shifted ability 4 spam time", "sec", SHIFTED4_SPAM_TIME, 0, 60, g,
+           "How long the shifted ability 4 is spammed."),
+        _f("shifted4_interval", "Shifted ability 4 interval", "sec", SHIFTED4_SPAM_INTERVAL, 0.02, 5, g,
+           "Pause between those presses."),
+        _f("shifted4_to5", "Wait before ability 5", "sec", SHIFTED_4_TO_5_DELAY, 0, 60, g,
+           "Pause after the shifted ability 4, before the last ability 5 loop."),
+        _f("ability5_interval", "Ability 5 press interval", "sec", ABILITY_5_CHECK_INTERVAL, 0.05, 30,
+           "Last step", "How often ability 5 is pressed (while holding the move key) until the retry button shows up."),
+    ]
+
+
+CONFIG_SECTIONS = ("Movement",) + FAMILIES
+CONFIG_FIELDS = {
+    "Movement": [
+        _f("after_ability2", "Wait after ability 2", "sec", AFTER_ABILITY2_DELAY, 0, 30, "Start",
+           "Nothing else happens during this wait, then the dashing starts."),
+        _f("dash_time", "Dash spam time", "sec", UNIVERSAL_DASH_TIME, 0, 60, "Dashing",
+           "How long Space is spammed."),
+        _f("dash_hold", "Hold per press", "range", UNIVERSAL_DASH_HOLD, 0.01, 1, "Dashing",
+           "How long each Space press is held (min - max, random in between)."),
+        _f("dash_gap", "Gap between presses", "range", UNIVERSAL_DASH_PRESS_GAP, 0, 1, "Dashing",
+           "Pause between two presses (min - max, random in between)."),
+        _f("tap_gap", "Strafe double-tap gap", "range", DOUBLE_TAP_GAP, 0, 1, "Strafe",
+           "Pause between the two presses of one strafe, like A-A (min - max)."),
+    ],
+    "Shiki": [
+        _f("after_strafe", "Wait after strafe", "sec", AFTER_STRAFE_DELAY, 0, 10, "Ability 3",
+           "Pause between the strafe and ability 3."),
+        _f("cooldown", "Buying time", "sec", ABILITY4_COOLDOWN, 0, 120, "Buying time",
+           "Seconds of strafing after ability 3 (the ability 4 cooldown)."),
+        _f("cooldown_margin", "Cooldown margin", "sec", ABILITY4_COOLDOWN_MARGIN, 0, 10, "Buying time",
+           "Tiny extra so ability 4 is surely off cooldown."),
+        _f("strafe_gap", "Gap between strafes", "range", STRAFE_DELAY, 0, 5, "Buying time",
+           "Pause between the strafes while buying time (min - max)."),
+        _f("icon_after", "Look for the icon after", "sec", SHIKI_ABILITY4_CHECK_AFTER, 0, 120,
+           "Ability 4 icon", "Start looking for the ability 4 icon this long after ability 3."),
+        _f("icon_interval", "Icon check interval", "sec", SHIKI_ABILITY4_CHECK_INTERVAL, 0.05, 10,
+           "Ability 4 icon", "Seconds between two looks for the icon."),
+        _f("icon_threshold", "Icon match threshold", "num", SHIKI_ABILITY4_THRESHOLD, 0.3, 1,
+           "Ability 4 icon", "Lower it if the icon isn't being detected."),
+        _f("ability4_time", "Ability 4 spam time", "sec", SHIKI_ABILITY4_SPAM_TIME, 0, 30, "Ability 4",
+           "How long ability 4 is spammed once the icon is seen."),
+        _f("ability4_interval", "Ability 4 spam interval", "sec", SHIKI_ABILITY4_SPAM_INTERVAL, 0.02, 5,
+           "Ability 4", "Pause between those presses."),
+        _f("after_ability", "Wait after ability 4", "sec", AFTER_ABILITY_DELAY, 0, 10, "Ability 4",
+           "Pause before the shift sequence starts."),
+    ] + _shift_fields(),
+    "Universal": [
+        _f("after_strafe", "Wait after strafe", "sec", AFTER_STRAFE_DELAY_FAST, 0, 10, "Ability 3",
+           "Pause between the strafe and ability 3."),
+        _f("look_time", "Look down time", "sec", LOOK_DOWN_TIME, 0, 20, "Look down",
+           "Seconds the mouse is dragged down (ctrl, mouse down, ctrl)."),
+        _f("look_pixels", "Pixels per step", "pix", LOOK_DOWN_PIXELS, 1, 200, "Look down",
+           "Pixels the mouse moves down every 0.01 s."),
+        _f("ability4_time", "Ability 4 spam time", "sec", UNIVERSAL_ABILITY4_SPAM_TIME, 0, 30, "Ability 4",
+           "How long ability 4 is spammed after looking down."),
+        _f("ability4_interval", "Ability 4 spam interval", "sec", UNIVERSAL_ABILITY4_SPAM_INTERVAL, 0.02, 5,
+           "Ability 4", "Pause between those presses."),
+        _f("after_ability", "Wait after ability 4", "sec", AFTER_ABILITY_DELAY, 0, 10, "Ability 4",
+           "Pause before the shift sequence starts."),
+    ] + _shift_fields(),
+    "Blood Awakening": [
+        _f("after_strafe", "Wait after strafe", "sec", AFTER_STRAFE_DELAY_FAST, 0, 10, "Start of the shift",
+           "Pause between the strafe and the ability 5 shift."),
+    ] + _shift_fields(),
+}
+CONFIG_INDEX = {sec: {f[0]: f for f in fields} for sec, fields in CONFIG_FIELDS.items()}
+CONFIG_BADGES = dict(FAMILY_BADGES, Movement=("M", "#a78bfa", "#1a1033"))   # purple M
+CONFIG_INFO = {
+    "Movement": "Used by every config: the wait after ability 2, the dashing and the strafe.",
+    "Shiki": "Used while the Shiki abilities are selected.",
+    "Universal": "Used while the Universal abilities are selected.",
+    "Blood Awakening": "Used while the Blood Awakening abilities are selected.",
+}
+
+
+def clean_cfg_value(spec, raw):
+    """A saved / typed value checked against its field's limits. Returns the value (a float, an
+    int for pixels, a (min, max) tuple for ranges) or None when it is not usable."""
+    kind, lo, hi = spec[2], spec[4], spec[5]
+
+    def num(v):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:   # v != v: NaN
+            return None
+        if kind == "pix":
+            return int(v) if float(v).is_integer() and lo <= v <= hi else None
+        return float(v) if lo <= v <= hi else None
+
+    if kind == "range":
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            a, b = num(raw[0]), num(raw[1])
+            if a is not None and b is not None and a <= b:
+                return (a, b)
+        return None
+    return num(raw)
+
+
+def parse_cfg_text(spec, texts):
+    """The text(s) of the entry box(es) -> a checked value, or None when it is not valid."""
+    nums = []
+    for t in texts:
+        try:
+            nums.append(float(t.strip().replace(",", ".")))
+        except ValueError:
+            return None
+    return clean_cfg_value(spec, nums if spec[2] == "range" else nums[0])
+
+
+def tv(section, key):
+    """The live value of one editable timing: the user's saved value, else its default."""
+    spec = CONFIG_INDEX[section][key]
+    val = settings["timings"].get(section, {}).get(key)
+    if val is None:
+        val = spec[3]
+    return tuple(val) if spec[2] == "range" else val
 
 
 # --- Themes (Settings > Themes). Every theme = 5 base colours (the rest is blended from
@@ -447,6 +589,7 @@ settings = {
     "family": DEFAULT_FAMILY,
     "theme": DEFAULT_THEME,
     "move_shifted": DEFAULT_MOVE_SHIFTED,   # direction held at step 9: Left (A) / Right (D) / Stand
+    "timings": {},          # Edit configs: {section: {key: value}} - only what the user changed
     "failsafe": dict(DEFAULT_FAILSAFE),     # stuck-mission rescue: time before it triggers + click spot
     "retry_scale": None,    # template size that last found the retry button on a non-1080p screen
                             # (None = not found yet). Tried first; updated when another size matches
@@ -495,6 +638,7 @@ def load_settings(saved):
         settings["theme"] = saved["theme"]
     if saved.get("move_shifted") in MOVE_SHIFTED_OPTIONS:
         settings["move_shifted"] = saved["move_shifted"]
+    apply_timings(saved.get("timings"))     # only present in older stats files (now config.json)
     fs = saved.get("failsafe")
     if isinstance(fs, dict):
         def _int(v):
@@ -516,6 +660,21 @@ def load_settings(saved):
             isinstance(win.get(k), int) and not isinstance(win.get(k), bool)
             for k in ("x", "y", "w", "h"))):
         settings["window"] = {k: win[k] for k in ("x", "y", "w", "h")}
+
+
+def apply_timings(tm):
+    """Merge saved Edit configs overrides {section: {key: value}} into settings["timings"].
+    Unknown sections / keys and bad or out-of-range values are ignored."""
+    if not isinstance(tm, dict):
+        return
+    for section, fields in CONFIG_FIELDS.items():
+        sv = tm.get(section)
+        if not isinstance(sv, dict):
+            continue
+        for spec in fields:
+            val = clean_cfg_value(spec, sv.get(spec[0]))
+            if val is not None:
+                settings["timings"].setdefault(section, {})[spec[0]] = val
 
 
 def mission_timeout():
@@ -957,7 +1116,8 @@ def save_stats():
     """Writes stats AND settings (same json). Resetting stats never touches settings."""
     data = {"missions": stats["missions"], "retries": stats["retries"],
             "completed": results["completed"], "failed": results["failed"],
-            "loot": dict(loot), "settings": settings}
+            "loot": dict(loot),
+            "settings": {k: v for k, v in settings.items() if k != "timings"}}
     try:
         with _save_lock:   # the macro thread and the Settings window both save
             tmp = stats_path() + ".tmp"
@@ -966,6 +1126,39 @@ def save_stats():
             os.replace(tmp, stats_path())  # never leaves a half-written file behind
     except OSError as e:
         log(f"Could not save stats: {e}")
+
+
+def config_path():
+    return os.path.join(data_dir(), CONFIG_FILE)
+
+
+def save_timings():
+    """config.json (Documents/Ymir Macro): ONLY the timings changed in Edit configs."""
+    try:
+        with _save_lock:
+            tmp = config_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(settings["timings"], f, indent=2)
+            os.replace(tmp, config_path())   # never leaves a half-written file behind
+    except OSError as e:
+        log(f"Could not save {CONFIG_FILE}: {e}")
+
+
+def load_timings():
+    """Read config.json into settings["timings"]. First run after the update: timings that an
+    older version kept in aotr_stats.json are moved over into config.json."""
+    try:
+        with open(config_path(), encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        if settings["timings"]:
+            save_timings()
+            save_stats()        # the stats file does not keep them any more
+        return
+    except (OSError, ValueError):
+        return                  # unreadable: keep what there is, the next change rewrites it
+    settings["timings"] = {}
+    apply_timings(data)
 
 
 def load_stats():
@@ -1424,9 +1617,11 @@ def _mouse_move_down(pixels):
     ctypes.windll.user32.mouse_event(0x0001, 0, int(pixels), 0, 0)   # MOUSEEVENTF_MOVE
 
 
-def look_down(check):
-    """Press ctrl, move the mouse down for LOOK_DOWN_TIME seconds, press ctrl again.
+def look_down(check, seconds=None, pixels=None):
+    """Press ctrl, move the mouse down for `seconds` (default LOOK_DOWN_TIME), press ctrl again.
     `check` is called all the time (stop / pause handling, may raise SystemExit)."""
+    seconds = LOOK_DOWN_TIME if seconds is None else seconds
+    pixels = LOOK_DOWN_PIXELS if pixels is None else pixels
     def press_ctrl():
         pydirectinput.keyDown(LOOK_DOWN_KEY)
         try:
@@ -1442,10 +1637,10 @@ def look_down(check):
     while time.time() < end:
         check()
         time.sleep(0.01)
-    end = time.time() + LOOK_DOWN_TIME
+    end = time.time() + seconds
     while time.time() < end:
         check()
-        _mouse_move_down(LOOK_DOWN_PIXELS)
+        _mouse_move_down(pixels)
         time.sleep(LOOK_DOWN_STEP)
     press_ctrl()
     end = time.time() + 0.15                 # let the cursor unlock before clicking
@@ -1574,7 +1769,7 @@ def release_all_keys():
 def double_tap(key):
     """One dash/strafe = the key pressed twice (like a-a)."""
     tap(key)
-    wait(random.uniform(*DOUBLE_TAP_GAP), scan=False)
+    wait(random.uniform(*tv("Movement", "tap_gap")), scan=False)
     tap(key)
 
 
@@ -1741,27 +1936,27 @@ def buy_time_until_ability4_ready():
     """Strafe A for the length of ability 4's cooldown. Call right after ability 3.
     Returns True when the Shiki ability 4 icon was seen (buying time over early), else False."""
     start = time.time()
-    total = ABILITY4_COOLDOWN + ABILITY4_COOLDOWN_MARGIN
+    total = tv("Shiki", "cooldown") + tv("Shiki", "cooldown_margin")
     keys = BUY_TIME_MOVES
     i = 0
     next_strafe = start
-    next_look = start + SHIKI_ABILITY4_CHECK_AFTER
+    next_look = start + tv("Shiki", "icon_after")
     while True:
         now = time.time()
         remaining = total - (now - start)
         if remaining <= 0:
             return False
         if _shiki_ability4_icon and now >= next_look:
-            next_look = now + SHIKI_ABILITY4_CHECK_INTERVAL
+            next_look = now + tv("Shiki", "icon_interval")
             if find_quality_template(grab_screen(), _shiki_ability4_icon,
-                                     SHIKI_ABILITY4_THRESHOLD) is not None:
+                                     tv("Shiki", "icon_threshold")) is not None:
                 log("Shiki ability 4 icon seen")
                 return True
         detail(f"Strafing {KEY_STRAFE.upper()}... ability 4 ready in {remaining:.0f}s")
         if now >= next_strafe:
             double_tap(keys[i % len(keys)])
             i += 1
-            next_strafe = time.time() + random.uniform(*STRAFE_DELAY)
+            next_strafe = time.time() + random.uniform(*tv("Shiki", "strafe_gap"))
         wait(0.05)
 
 
@@ -1788,25 +1983,36 @@ def spam_recorded_dash(key, seconds):
         show("Dashing", f"Spamming dash... {remaining:.0f}s left")
         pydirectinput.keyDown(key)
         try:
-            wait(random.uniform(*UNIVERSAL_DASH_HOLD), scan=False)
+            wait(random.uniform(*tv("Movement", "dash_hold")), scan=False)
         finally:
             pydirectinput.keyUp(key)
-        wait(random.uniform(*UNIVERSAL_DASH_PRESS_GAP), scan=False)
+        if time.time() >= end:      # last press done: no trailing gap, move on at once
+            return
+        wait(random.uniform(*tv("Movement", "dash_gap")), scan=False)
 
 
-def shift_sequence():
+def shift_sequence(fam=None):
     """The shift: ability 5 spam, the wait, shifted ability 4, then ability 5 until the retry
     button shows up."""
+    fam = fam or settings["family"]     # this config's own shift timings (Edit configs)
+    shift_spam_time = tv(fam, "shift_spam_time")
+    shift_spam_interval = tv(fam, "shift_spam_interval")
+    shift_spam_extra = tv(fam, "shift_spam_extra")
+    shifted4_at = tv(fam, "shifted4_at")
+    shifted4_time = tv(fam, "shifted4_time")
+    shifted4_interval = tv(fam, "shifted4_interval")
+    shifted4_to5 = tv(fam, "shifted4_to5")
+    ability5_interval = tv(fam, "ability5_interval")
     set_step(6)
     show("Shift", "Spamming ability 5 so the shift is used")
-    log(f"Ability 5 spam for {SHIFT_SPAM_TIME:g}s (shift)")
-    spam_end = time.time() + SHIFT_SPAM_TIME
+    log(f"Ability 5 spam for {shift_spam_time:g}s (shift)")
+    spam_end = time.time() + shift_spam_time
     while time.time() < spam_end:
         tap(KEY_ABILITY_LAST)
-        wait(SHIFT_SPAM_INTERVAL)
-    log(f"Waiting {SHIFTED4_SPAM_AT:g}s for the shift (then shifted ability 4)")
-    shift_end = time.time() + SHIFTED4_SPAM_AT
-    extra_end = time.time() + SHIFT_SPAM_EXTRA   # still pressing 5 quietly during the first seconds of the wait
+        wait(shift_spam_interval)
+    log(f"Waiting {shifted4_at:g}s for the shift (then shifted ability 4)")
+    shift_end = time.time() + shifted4_at
+    extra_end = time.time() + shift_spam_extra   # still pressing 5 quietly during the first seconds of the wait
     while True:
         remaining = shift_end - time.time()
         if remaining <= 0:
@@ -1814,16 +2020,16 @@ def shift_sequence():
         show("Shift", f"Waiting for the shift... {remaining:.0f}s")
         if time.time() < extra_end:
             tap(KEY_ABILITY_LAST)
-            wait(min(SHIFT_SPAM_INTERVAL, remaining))
+            wait(min(shift_spam_interval, remaining))
         else:
             wait(min(0.5, remaining))
 
     set_step(7)
-    log(f"Shifted ability 4 spam for {SHIFTED4_SPAM_TIME:g}s")
-    spam_key_for(KEY_ABILITY_3RD, SHIFTED4_SPAM_TIME, SHIFTED4_SPAM_INTERVAL,
+    log(f"Shifted ability 4 spam for {shifted4_time:g}s")
+    spam_key_for(KEY_ABILITY_3RD, shifted4_time, shifted4_interval,
                  "shifted ability 4")
-    show("Shifted ability 4", f"Waiting {SHIFTED_4_TO_5_DELAY:g}s before ability 5")
-    wait(SHIFTED_4_TO_5_DELAY)
+    show("Shifted ability 4", f"Waiting {shifted4_to5:g}s before ability 5")
+    wait(shifted4_to5)
 
     set_step(8)
     move = settings["move_shifted"]
@@ -1852,7 +2058,7 @@ def shift_sequence():
                 show("Ability 5", f"Pressed x{presses} + {hold_txt} "
                                   "- until the mission ends")
                 tap(KEY_ABILITY_LAST)
-                next_5 = time.time() + ABILITY_5_CHECK_INTERVAL
+                next_5 = time.time() + ability5_interval
             wait(0.05)
     finally:
         if hold_key:
@@ -1873,21 +2079,23 @@ def run_mission():
     show("Ability 2", "Only ability 2 for now - no dashing yet")
     log("Ability 2")
     tap(KEY_ABILITY_1ST)
-    wait(AFTER_ABILITY2_DELAY)  # nothing else happens until the dash sequence
+    wait(tv("Movement", "after_ability2"))  # nothing else happens until the dash sequence
 
     # read once per mission: the movement is the same for every config,
     # the family (abilities) decides what happens from ability 3 on
-    universal = settings["family"] == "Universal"   # ability 3, wait, look down, ability 4, shift
-    blood = settings["family"] == "Blood Awakening"
+    fam = settings["family"]
+    universal = fam == "Universal"   # ability 3, wait, look down, ability 4, shift
+    blood = fam == "Blood Awakening"
 
     set_step(1)
-    log(f"Movement: spamming dash for {UNIVERSAL_DASH_TIME:g}s")
-    spam_recorded_dash(KEY_DASH, UNIVERSAL_DASH_TIME)
+    dash_time = tv("Movement", "dash_time")
+    log(f"Movement: spamming dash for {dash_time:g}s")
+    spam_recorded_dash(KEY_DASH, dash_time)
 
     set_step(2)
     show("Strafe", f"Double-tap {KEY_STRAFE.upper()}")
     double_tap(KEY_STRAFE)
-    wait(0.3)
+    wait(tv(fam, "after_strafe"), scan=False)
 
     if blood:
         # Blood Awakening: no ability 3 / buying time / ability 4 - straight to the ability 5 shift
@@ -1903,32 +2111,35 @@ def run_mission():
             set_step(4)
             show("Looking down", "ctrl, mouse down, ctrl")
             log("Universal: looking down (ctrl, mouse down, ctrl)")
-            look_down(lambda: tick(scan_retry=False))
+            look_down(lambda: tick(scan_retry=False),
+                      tv("Universal", "look_time"), tv("Universal", "look_pixels"))
             set_step(5)
-            show("Ability 4", f"Spamming ability 4 for {UNIVERSAL_ABILITY4_SPAM_TIME:g}s")
-            log(f"Ability 4 spam for {UNIVERSAL_ABILITY4_SPAM_TIME:g}s")
-            spam_key_for(KEY_ABILITY_3RD, UNIVERSAL_ABILITY4_SPAM_TIME,
-                         UNIVERSAL_ABILITY4_SPAM_INTERVAL, "ability 4")
-            wait(AFTER_ABILITY_DELAY)
+            u4_time = tv("Universal", "ability4_time")
+            show("Ability 4", f"Spamming ability 4 for {u4_time:g}s")
+            log(f"Ability 4 spam for {u4_time:g}s")
+            spam_key_for(KEY_ABILITY_3RD, u4_time,
+                         tv("Universal", "ability4_interval"), "ability 4")
+            wait(tv("Universal", "after_ability"))
         else:
             set_step(4)
             show("Buying time", f"Strafing {KEY_STRAFE.upper()} until ability 4 is off cooldown")
-            log(f"Buying time for {ABILITY4_COOLDOWN:.0f}s (ability 4 cooldown)")
+            log(f"Buying time for {tv('Shiki', 'cooldown'):.0f}s (ability 4 cooldown)")
             icon_seen = buy_time_until_ability4_ready()
 
             set_step(5)
             if icon_seen:
-                show("Ability 4", f"Icon seen - spamming ability 4 for {SHIKI_ABILITY4_SPAM_TIME:g}s")
-                log(f"Ability 4 spam for {SHIKI_ABILITY4_SPAM_TIME:g}s (icon seen)")
-                spam_key_for(KEY_ABILITY_3RD, SHIKI_ABILITY4_SPAM_TIME,
-                             SHIKI_ABILITY4_SPAM_INTERVAL, "ability 4")
+                s4_time = tv("Shiki", "ability4_time")
+                show("Ability 4", f"Icon seen - spamming ability 4 for {s4_time:g}s")
+                log(f"Ability 4 spam for {s4_time:g}s (icon seen)")
+                spam_key_for(KEY_ABILITY_3RD, s4_time,
+                             tv("Shiki", "ability4_interval"), "ability 4")
             else:
                 show("Ability 4")
                 log("Ability 4")
                 tap(KEY_ABILITY_3RD)
-            wait(AFTER_ABILITY_DELAY)
+            wait(tv("Shiki", "after_ability"))
 
-    shift_sequence()
+    shift_sequence(fam)
 
 
 # --------------------------- macro thread -------------------------------
@@ -1970,7 +2181,7 @@ def macro_main():
             _shiki_ability4_icon = load_quality_templates(SHIKI_ABILITY4_FILE)
         except FileNotFoundError:
             _shiki_ability4_icon = None
-            log(f"Shiki: {SHIKI_ABILITY4_FILE} not found - buying time uses the {ABILITY4_COOLDOWN:.0f}s timer")
+            log(f"Shiki: {SHIKI_ABILITY4_FILE} not found - buying time uses the {tv('Shiki', 'cooldown'):.0f}s timer")
         _grab_template = None
         if GRAB_ENABLED:
             try:
@@ -3350,7 +3561,7 @@ class SettingsWindow(tk.Toplevel):
         """(Re)build every widget - on open, and again when the theme changes."""
         self.cancel_capture()
         for child in self.winfo_children():
-            if isinstance(child, AssetOverrideWindow):
+            if isinstance(child, (AssetOverrideWindow, ConfigEditorWindow)):
                 continue
             child.destroy()
         self.key_buttons, self.pages, self.tab_widgets = {}, {}, {}
@@ -3662,6 +3873,8 @@ class SettingsWindow(tk.Toplevel):
         self.family_dd.pack(fill="x")
         tk.Label(c, text="Yeager not recommended", font=(App.FONT, 8),
                  fg=App.SUB, bg=App.CARD, anchor="w").pack(fill="x", pady=(8, 0))
+        self.flat_button(c, "Edit configs", self.open_config_window).pack(anchor="w", pady=(10, 0))
+        self.hint(c, "Every timing of the macro: movement and the three ability configs.")
 
         # section 2: movement while shifted (step 9)
         self.v_move_shifted = tk.StringVar(value=settings["move_shifted"])
@@ -3745,6 +3958,18 @@ class SettingsWindow(tk.Toplevel):
         except tk.TclError:
             pass
         self.asset_win = AssetOverrideWindow(self)
+
+    def open_config_window(self):
+        win = getattr(self, "config_win", None)
+        try:
+            if win is not None and win.winfo_exists():
+                win.deiconify()
+                win.lift()
+                win.focus_force()
+                return
+        except tk.TclError:
+            pass
+        self.config_win = ConfigEditorWindow(self)
 
     def pick_failsafe_spot(self):
         """Tint the screen, show the live coordinates next to the cursor, and store the spot of
@@ -3909,6 +4134,219 @@ class SettingsWindow(tk.Toplevel):
         self.cancel_capture()
         self.commit()
         self.app.settings_win = None
+        self.destroy()
+
+
+class ConfigEditorWindow(tk.Toplevel):
+    """Every timing of the routine, one part at a time: Movement + the three ability configs.
+    Pick the part in the dropdown at the top and change a value - it is checked and saved at once
+    (settings["timings"]); the macro reads it the next time it needs it."""
+
+    def __init__(self, settings_win):
+        super().__init__(settings_win)
+        self.withdraw()
+        self.sw = settings_win
+        self.section = CONFIG_SECTIONS[0]
+        self.rows_section = self.section   # the part the boxes on screen belong to
+        self.rows = {}              # key -> (spec, [StringVar], [Entry], name label)
+        self.save_job = None
+        self.say_job = None
+        self.title("ymir - edit configs")
+        try:
+            self.iconbitmap(asset_path(ICON_FILE))
+        except (tk.TclError, OSError):
+            pass
+        self.configure(bg=App.BG)
+        self.transient(settings_win)
+        self.attributes("-topmost", True)
+        self.minsize(480, 380)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+
+        # bottom bar first, so it always stays visible
+        bottom = tk.Frame(self, bg=App.BG)
+        bottom.pack(side="bottom", fill="x", padx=18, pady=(8, 14))
+        self.sw.flat_button(bottom, "Reset this config", self.reset_section).pack(side="left")
+        self.note = tk.Label(bottom, text="", font=(App.FONT, 9), fg=App.SUB, bg=App.BG,
+                             anchor="w", justify="left", wraplength=280)
+        self.note.pack(side="left", padx=(12, 0), fill="x", expand=True)
+
+        top = tk.Frame(self, bg=App.BG)
+        top.pack(side="top", fill="x", padx=18, pady=(14, 0))
+        tk.Label(top, text="CONFIG", font=(App.FONT, 8, "bold"), fg=App.SUB, bg=App.BG,
+                 anchor="w").pack(fill="x")
+        items = [(sec, sec, CONFIG_BADGES[sec], None) for sec in CONFIG_SECTIONS]
+        self.dd = ModernDropdown(top, items, self.section, self.on_pick)
+        self.dd.pack(fill="x", pady=(4, 0))
+        self.info = tk.Label(self, text="", font=(App.FONT, 9), fg=App.SUB, bg=App.BG,
+                             anchor="w", justify="left", wraplength=440)
+        self.info.pack(side="top", fill="x", padx=18, pady=(6, 6))
+
+        wrap = tk.Frame(self, bg=App.BG)
+        wrap.pack(side="top", fill="both", expand=True, padx=(18, 8))
+        self.canvas = tk.Canvas(wrap, bg=App.BG, highlightthickness=0, bd=0)
+        self.scroll = ttk.Scrollbar(wrap, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.scroll.set)
+        self.scroll.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = tk.Frame(self.canvas, bg=App.BG)
+        self.inner_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>",
+                        lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>",
+                         lambda e: self.canvas.itemconfigure(self.inner_id, width=e.width))
+        self.bind("<MouseWheel>", self._wheel)
+
+        self.build_rows()
+        self.update_idletasks()
+        x, y = settings_win.winfo_x() + 30, settings_win.winfo_y() + 30
+        self.geometry(f"520x640+{x}+{y}")
+        style_title_bar(self, App.BG)
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _wheel(self, e):
+        self.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+    # ----- rows -----
+    def build_rows(self):
+        """Show the fields of the picked part (the caller has already committed the old ones)."""
+        self.rows = {}      # first: a focus-out while the old boxes are destroyed must save nothing
+        for child in self.inner.winfo_children():
+            child.destroy()
+        self.rows_section = self.section
+        active = " (active now)" if self.section == settings["family"] else ""
+        self.info.configure(text=CONFIG_INFO[self.section] + active)
+        group, card = None, None
+        for spec in CONFIG_FIELDS[self.section]:
+            if spec[6] != group:
+                group = spec[6]
+                card = self._card(group)
+            self._row(card, spec)
+        self.update_idletasks()
+        self.canvas.yview_moveto(0)
+
+    def _card(self, title):
+        outer = tk.Frame(self.inner, bg=App.CARD, highlightbackground=App.BORDER,
+                         highlightthickness=App.CARD_BW)
+        outer.pack(fill="x", pady=4)
+        inner = tk.Frame(outer, bg=App.CARD)
+        inner.pack(fill="x", padx=16, pady=(12, 4))
+        tk.Label(inner, text=title.upper(), font=(App.FONT, 8, "bold"), fg=App.SUB, bg=App.CARD,
+                 anchor="w").pack(fill="x", pady=(0, 8))
+        for w in (outer, inner):
+            w.bind("<MouseWheel>", self._wheel)
+        return inner
+
+    def _row(self, parent, spec):
+        key, label, kind, _default, lo, hi, _grp, hint = spec
+        unit = "px" if kind == "pix" else "" if kind == "num" else "s"
+        cur = tv(self.section, key)
+        values = list(cur) if kind == "range" else [cur]
+        row = tk.Frame(parent, bg=App.CARD)
+        row.pack(fill="x", pady=(0, 10))
+        line = tk.Frame(row, bg=App.CARD)
+        line.pack(fill="x")
+        edited = key in settings["timings"].get(self.section, {})
+        name = tk.Label(line, text=label, font=(App.FONT, 10), fg=App.ACCENT if edited else App.TEXT,
+                        bg=App.CARD, anchor="w")
+        name.pack(side="left")
+        box = tk.Frame(line, bg=App.CARD)
+        box.pack(side="right")
+        vars_, entries = [], []
+        for i, v in enumerate(values):
+            if i:
+                tk.Label(box, text="-", font=(App.FONT, 10), fg=App.SUB,
+                         bg=App.CARD).pack(side="left", padx=4)
+            var = tk.StringVar(value=f"{v:g}")
+            e = tk.Entry(box, textvariable=var, width=7, font=(App.FONT, 10), justify="center",
+                         bg=App.LOGBG, fg=App.TEXT, insertbackground=App.TEXT, relief="flat",
+                         highlightthickness=1, highlightbackground=App.BORDER,
+                         highlightcolor=App.ACCENT)
+            e.pack(side="left", ipady=3)
+            e.bind("<Return>", lambda _e: self.commit())
+            e.bind("<FocusOut>", lambda _e: self.commit())
+            var.trace_add("write", lambda *_: self.save_soon())
+            vars_.append(var)
+            entries.append(e)
+        tk.Label(box, text=unit, font=(App.FONT, 10), fg=App.TEXT, bg=App.CARD,
+                 width=2, anchor="w").pack(side="left", padx=(6, 0))
+        limits = f"Allowed: {lo:g} to {hi:g}{unit}."
+        tk.Label(row, text=f"{hint} {limits}" if hint else limits, font=(App.FONT, 8), fg=App.SUB,
+                 bg=App.CARD, anchor="w", justify="left", wraplength=400).pack(fill="x", pady=(3, 0))
+        for w in (row, line, name):
+            w.bind("<MouseWheel>", self._wheel)
+        self.rows[key] = (spec, vars_, entries, name)
+
+    # ----- saving -----
+    def save_soon(self):
+        if self.save_job:
+            self.after_cancel(self.save_job)
+        self.save_job = self.after(400, self.commit)
+
+    def commit(self):
+        """Check every box of the shown part and save it (bad boxes turn red and are not saved)."""
+        if self.save_job:
+            try:
+                self.after_cancel(self.save_job)
+            except tk.TclError:
+                pass
+            self.save_job = None
+        if not self.rows:
+            return
+        section = self.rows_section
+        store = settings["timings"].setdefault(section, {})
+        bad = 0
+        try:
+            for key, (spec, vars_, entries, name) in self.rows.items():
+                val = parse_cfg_text(spec, [v.get() for v in vars_])
+                if val is None:
+                    bad += 1
+                    for e in entries:
+                        e.configure(highlightbackground="#f87171", highlightcolor="#f87171")
+                    continue
+                for e in entries:
+                    e.configure(highlightbackground=App.BORDER, highlightcolor=App.ACCENT)
+                default = spec[3]
+                same = (tuple(val) == tuple(default)) if spec[2] == "range" else val == default
+                if same:
+                    store.pop(key, None)
+                else:
+                    store[key] = val
+                name.configure(fg=App.ACCENT if key in store else App.TEXT)
+        except tk.TclError:
+            return                       # the window is closing
+        if not store:
+            settings["timings"].pop(section, None)
+        save_timings()
+        if bad:
+            self.say("Some values are not numbers or out of range - they are marked red and not saved.",
+                     error=True)
+
+    def on_pick(self, section):
+        if section == self.section:
+            return
+        self.commit()
+        self.section = section
+        self.build_rows()
+
+    def reset_section(self):
+        if self.save_job:
+            self.after_cancel(self.save_job)
+            self.save_job = None
+        settings["timings"].pop(self.section, None)
+        save_timings()
+        self.build_rows()
+        self.say(f"{self.section}: back to the defaults.", good=True)
+
+    def say(self, msg, error=False, good=False):
+        self.note.configure(text=msg, fg="#f87171" if error else "#34d399" if good else App.SUB)
+        if self.say_job:
+            self.after_cancel(self.say_job)
+        self.say_job = self.after(5000, lambda: self.note.configure(text=""))
+
+    def close(self):
+        self.commit()
         self.destroy()
 
 
@@ -4210,6 +4648,7 @@ def apply_theme(name):
 
 def main():
     load_stats()          # stats + settings (saved keybinds, webhook, family)
+    load_timings()        # config.json: the timings changed in Edit configs
     ensure_override_dir() # Documents\\Ymir Macro\\asset_override: users drop their own pictures here
     apply_settings()
     register_hotkeys()
